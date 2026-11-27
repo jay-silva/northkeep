@@ -134,7 +134,7 @@ export function isProjectPaperwork(row: { type: string; scope: string; content: 
  * word found only in a scope or type name counts half, as before, so filing
  * a memory under a word never counts for more than saying it.
  */
-export function rankSharedEntries<T extends { type: string; scope: string; content: string; confirmed?: boolean; archive?: boolean }>(
+export function rankSharedEntries<T extends { type: string; scope: string; content: string; confirmed?: boolean; archive?: boolean; chat?: unknown }>(
   entries: readonly T[],
   query: string,
   limit: number,
@@ -152,7 +152,10 @@ export function rankSharedEntries<T extends { type: string; scope: string; conte
       let matched = 0;
       for (const [term, weight] of weights) matched += text.has(term) ? weight : names.has(term) ? 0.5 * weight : 0;
       // The connector knows no recency or source, so confirmed is the only bonus (ADR 0090 D2, D3).
-      const kept = entry.confirmed === true ? 1 + CONFIRMED_BOOST : 1 - lengthPenalty(text.size);
+      // ADR 0092: an answer accepted in chat gets half the boost and keeps the length penalty.
+      const kept = entry.confirmed === true
+        ? 1 + CONFIRMED_BOOST
+        : (entry.chat !== undefined ? 1 + CONFIRMED_BOOST / 2 : 1) - lengthPenalty(text.size);
       return { entry, score: (matched / total) * kept };
     })
     .filter((row) => row.score > 0)

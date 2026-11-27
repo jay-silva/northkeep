@@ -41,6 +41,8 @@ export const KEK_LABEL_TOKEN = 'nk-conn-kek-token-v1';
 /** Versioned format prefixes: wrapped DEKs and encrypted rows. */
 export const WRAP_PREFIX = 'nkw1';
 export const ROW_PREFIX = 'nkc1';
+/** ADR 0092: an answer record. Its own prefix and label, so a row and an answer cannot stand in for each other. */
+export const ANSWER_PREFIX = 'nka1';
 
 /** The server-environment KEK pepper must be at least this many bytes. */
 export const KEK_PEPPER_MIN_BYTES = 32;
@@ -77,6 +79,7 @@ export function parseKekPepper(raw: string | undefined): Uint8Array | null {
 
 /** AAD domain label for row encryption (concatenated with the accountHash). */
 const ROW_AAD_LABEL = 'nk-conn-row-v1';
+const ANSWER_AAD_LABEL = 'nk-conn-answer-v1';
 
 const DEK_BYTES = 32;
 
@@ -192,6 +195,16 @@ export interface RowPlain {
   archive?: true;
   /** ADR 0085 D1: the connected app's self-reported name, tamed. Inside the ciphertext, never a column. */
   app?: string;
+  /** ADR 0092: an app reported the user said this is right. Which app, and when. */
+  chat?: { app: string; at: string };
+}
+
+/** A pushed `chat` mark, or undefined for anything else. Kept short: it is a name and a date. */
+export function chatMark(raw: unknown): { app: string; at: string } | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const { app, at } = raw as { app?: unknown; at?: unknown };
+  if (typeof app !== 'string' || typeof at !== 'string' || app.length > 200 || at.length > 40) return undefined;
+  return { app, at };
 }
 
 /**
@@ -200,7 +213,7 @@ export interface RowPlain {
  * AAD-bound to the account (NOT the entry id — ack's id-remap stays metadata-only).
  */
 export async function encryptRow(
-  row: { accountHash: string; type: string; content: string; confirmed?: boolean; archive?: boolean; app?: string },
+  row: { accountHash: string; type: string; content: string; confirmed?: boolean; archive?: boolean; app?: string; chat?: { app: string; at: string } },
   dek: Uint8Array,
 ): Promise<string> {
   const s = await sodium();
@@ -211,6 +224,7 @@ export async function encryptRow(
     ...(row.confirmed === true ? { confirmed: true as const } : {}),
     ...(row.archive === true ? { archive: true as const } : {}),
     ...(row.app ? { app: row.app } : {}),
+    ...(row.chat ? { chat: { app: row.chat.app, at: row.chat.at } } : {}),
   };
   const ct = s.crypto_aead_xchacha20poly1305_ietf_encrypt(
     s.from_string(JSON.stringify(plain)),
@@ -243,10 +257,49 @@ export async function decryptRow(stored: string, accountHash: string, dek: Uint8
       ...(parsed.confirmed === true ? { confirmed: true as const } : {}),
       ...(parsed.archive === true ? { archive: true as const } : {}),
       ...(typeof parsed.app === 'string' && parsed.app !== '' ? { app: parsed.app } : {}),
+      ...(chatMark(parsed.chat) ? { chat: chatMark(parsed.chat)! } : {}),
     };
   } catch {
     throw new ConnectorCryptoError('Row envelope is not valid JSON {type, content}');
   }
+}
+
+/**
+ * ADR 0092: seal one answer record (or the vault's set of answered pairs) under
+ * the account DEK, as a row is, AAD-bound to the account under the answer label.
+ */
+export async function encryptAnswer(accountHash: string, plain: unknown, dek: Uint8Array): Promise<string> {
+  const s = await sodium();
+  const nonce = s.randombytes_buf(s.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+  const ct = s.crypto_aead_xchacha20poly1305_ietf_encrypt(s.from_string(JSON.stringify(plain)), answerAad(accountHash), null, nonce, dek);
+  return `${ANSWER_PREFIX}:${b64(nonce)}:${b64(ct)}`;
+}
+
+/** Open one sealed answer. Throws ConnectorCryptoError on failure; the caller checks the shape. */
+export async function decryptAnswer(stored: string, accountHash: string, dek: Uint8Array): Promise<unknown> {
+  const s = await sodium();
+  const parts = parseVersioned(stored, ANSWER_PREFIX);
+  let plainBytes: Uint8Array;
+  try {
+    plainBytes = s.crypto_aead_xchacha20poly1305_ietf_decrypt(null, parts.ct, answerAad(accountHash), parts.nonce, dek);
+  } catch {
+    throw new ConnectorCryptoError('Answer ciphertext does not open for this account/DEK');
+  }
+  try {
+    return JSON.parse(s.to_string(plainBytes)) as unknown;
+  } catch {
+    throw new ConnectorCryptoError('Answer envelope is not valid JSON');
+  }
+}
+
+/** BLAKE2b-256 in hex, as core's blake2bHex gives it (packages/core/src/crypto.ts). */
+export async function blake2bHex(text: string): Promise<string> {
+  const s = await sodium();
+  return Buffer.from(s.crypto_generichash(32, s.from_string(text), null)).toString('hex');
+}
+
+function answerAad(accountHash: string): Uint8Array {
+  return new Uint8Array(Buffer.concat([Buffer.from(ANSWER_AAD_LABEL, 'utf8'), Buffer.from(accountHash, 'utf8')]));
 }
 
 /** True iff a stored content string is an encrypted row (legacy plaintext detector). */

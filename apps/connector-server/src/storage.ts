@@ -95,6 +95,8 @@ export interface SharedEntry {
   confirmed?: boolean;
   /** ADR 0084: decrypted view only, like confirmed. */
   archive?: boolean;
+  /** ADR 0092: decrypted view only. An app reported the user said this is right. */
+  chat?: { app: string; at: string };
 }
 
 /**
@@ -109,6 +111,23 @@ export interface PendingReplace {
   newId: string;
   createdAt: string;
 }
+
+/**
+ * ADR 0092: one answer record. In the clear: the id, the origin, the pending
+ * flag and the time. Everything else is inside the "nka1:" ciphertext.
+ * `connector`: a Cloud app's answer waiting for a device. `vault`: the one
+ * record holding the device's answered pairs, state and date only.
+ */
+export interface SharedAnswer {
+  answerId: string;
+  origin: 'vault' | 'connector';
+  pending: boolean;
+  content: string;
+  createdAt: string;
+}
+
+/** The answer id of an account's `vault` record: there is one per account. */
+export const VAULT_ANSWERS_ID = 'vault';
 
 /** The base_revision of a document created on the connector, where no base exists (ADR 0063). */
 export const BASE_NEW = 'new';
@@ -373,6 +392,16 @@ export interface ConnectorStorage {
    */
   keepForgets(accountHash: string, entryIds: string[]): Promise<number>;
 
+  // --- answers (ADR 0092) ---
+  /** Store a Cloud app's answer as pending, in one statement that counts first. False when `cap` already wait. */
+  putCloudAnswer(accountHash: string, answerId: string, content: string, cap: number): Promise<boolean>;
+  /** Every answer record for the account, oldest first. */
+  listAnswers(accountHash: string): Promise<SharedAnswer[]>;
+  /** Replace the account's `vault` record with this sealed set. */
+  replaceVaultAnswers(accountHash: string, content: string): Promise<void>;
+  /** Delete pending Cloud answers by id, once a device took them in. Returns how many went. */
+  dropAnswers(accountHash: string, answerIds: string[]): Promise<number>;
+
   // --- audit ---
   appendAudit(entry: ConnectorAuditEntry): Promise<void>;
 
@@ -424,6 +453,8 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
   private pendingForgets = new Map<string, Set<string>>();
   /** accountHash -> (replaceId -> queued replace), ADR 0085 D4. */
   private pendingReplaces = new Map<string, Map<string, PendingReplace>>();
+  /** accountHash -> (answerId -> answer record), ADR 0092. */
+  private answers = new Map<string, Map<string, SharedAnswer>>();
   /** `${accountHash}\0${scope}` -> write counter (ADR 0063). NUL never reaches storage, so the key is unambiguous. */
   private scopeSeq = new Map<string, number>();
   /** accountHash -> the vault order last accepted (ADR 0063 D5). */
@@ -855,6 +886,40 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
     return n;
   }
 
+  async putCloudAnswer(accountHash: string, answerId: string, content: string, cap: number): Promise<boolean> {
+    let byId = this.answers.get(accountHash);
+    if (!byId) {
+      byId = new Map();
+      this.answers.set(accountHash, byId);
+    }
+    if ([...byId.values()].filter((a) => a.origin === 'connector').length >= cap) return false;
+    if (!byId.has(answerId)) byId.set(answerId, { answerId, origin: 'connector', pending: true, content, createdAt: new Date().toISOString() });
+    return true;
+  }
+
+  async listAnswers(accountHash: string): Promise<SharedAnswer[]> {
+    return [...(this.answers.get(accountHash)?.values() ?? [])].map((a) => ({ ...a }));
+  }
+
+  async replaceVaultAnswers(accountHash: string, content: string): Promise<void> {
+    let byId = this.answers.get(accountHash);
+    if (!byId) {
+      byId = new Map();
+      this.answers.set(accountHash, byId);
+    }
+    byId.delete(VAULT_ANSWERS_ID);
+    byId.set(VAULT_ANSWERS_ID, { answerId: VAULT_ANSWERS_ID, origin: 'vault', pending: false, content, createdAt: new Date().toISOString() });
+  }
+
+  async dropAnswers(accountHash: string, answerIds: string[]): Promise<number> {
+    const byId = this.answers.get(accountHash);
+    let n = 0;
+    for (const id of new Set(answerIds)) {
+      if (byId?.get(id)?.origin === 'connector' && byId.delete(id)) n++;
+    }
+    return n;
+  }
+
   async appendAudit(entry: ConnectorAuditEntry): Promise<void> {
     this.audit.push({ ...entry });
   }
@@ -912,6 +977,7 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
       tombstones: [...this.tombstones.entries()],
       pendingForgets: [...this.pendingForgets.entries()].map(([a, s]) => [a, [...s]]),
       pendingReplaces: [...this.pendingReplaces.entries()].map(([a, m]) => [a, [...m.values()]]),
+      answers: [...this.answers.entries()].map(([a, m]) => [a, [...m.values()]]),
       scopeSeq: [...this.scopeSeq.entries()],
       vaultOrder: [...this.vaultOrder.entries()],
       audit: this.audit,

@@ -5,6 +5,7 @@ import {
   MAX_TOMBSTONES_PER_ACCOUNT,
   NO_VAULT_CLAIM,
   StalePushError,
+  VAULT_ANSWERS_ID,
   type ConnectorRowInsert,
   type VaultOrderClaim,
   type ConnectorAuditEntry,
@@ -13,6 +14,7 @@ import {
   type PendingReplace,
   type ScopeTombstone,
   type StoredClientRow,
+  type SharedAnswer,
   type SharedEntry,
   type StoredOAuthCode,
   type StoredOAuthToken,
@@ -163,6 +165,17 @@ ON scope_tombstones (account_hash, scope)`,
   new_id       text NOT NULL,
   created_at   timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (account_hash, replace_id)
+)`,
+  // ADR 0092: answer records. Id, origin, pending flag and time in the clear;
+  // pair key, ids, words and app name only inside the ciphertext.
+  `CREATE TABLE IF NOT EXISTS shared_answers (
+  account_hash text NOT NULL,
+  answer_id    text NOT NULL,
+  origin       text NOT NULL,
+  pending      boolean NOT NULL DEFAULT false,
+  content      text NOT NULL,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_hash, answer_id)
 )`,
 ];
 
@@ -887,6 +900,59 @@ export class NeonConnectorStorage implements ConnectorStorage {
     const rows = (await this.sql`
       WITH d AS (
         DELETE FROM pending_replaces WHERE account_hash = ${accountHash} AND replace_id = ANY(${ids}::text[]) RETURNING 1
+      ) SELECT count(*)::int AS n FROM d
+    `) as unknown as Array<{ n: number | string }>;
+    return Number(rows[0]?.n ?? 0);
+  }
+
+  async putCloudAnswer(accountHash: string, answerId: string, content: string, cap: number): Promise<boolean> {
+    await this.ensureSchema();
+    // The lock makes the count and the insert one step, so two saves at once cannot pass the cap together.
+    const results = (await this.orderedTransaction([
+      this.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`shared_answers:${accountHash}`}, 0))`,
+      this.sql`
+        INSERT INTO shared_answers (account_hash, answer_id, origin, pending, content)
+        SELECT ${accountHash}, ${answerId}, 'connector', true, ${content}
+        WHERE (SELECT count(*) FROM shared_answers WHERE account_hash = ${accountHash} AND origin = 'connector') < ${cap}
+        ON CONFLICT (account_hash, answer_id) DO NOTHING
+        RETURNING 1
+      `,
+    ])) as unknown as [unknown, unknown[]];
+    return results[1].length > 0;
+  }
+
+  async listAnswers(accountHash: string): Promise<SharedAnswer[]> {
+    await this.ensureSchema();
+    const rows = (await this.sql`
+      SELECT answer_id, origin, pending, content, created_at FROM shared_answers
+      WHERE account_hash = ${accountHash} ORDER BY created_at ASC, answer_id ASC
+    `) as unknown as Array<{ answer_id: string; origin: string; pending: boolean; content: string; created_at: string }>;
+    return rows.map((r) => ({
+      answerId: r.answer_id,
+      origin: r.origin === 'vault' ? 'vault' : 'connector',
+      pending: r.pending === true,
+      content: r.content,
+      createdAt: new Date(r.created_at).toISOString(),
+    }));
+  }
+
+  async replaceVaultAnswers(accountHash: string, content: string): Promise<void> {
+    await this.ensureSchema();
+    await this.sql`
+      INSERT INTO shared_answers (account_hash, answer_id, origin, pending, content)
+      VALUES (${accountHash}, ${VAULT_ANSWERS_ID}, 'vault', false, ${content})
+      ON CONFLICT (account_hash, answer_id) DO UPDATE SET content = EXCLUDED.content, created_at = now()
+      WHERE shared_answers.origin = 'vault'
+    `;
+  }
+
+  async dropAnswers(accountHash: string, answerIds: string[]): Promise<number> {
+    await this.ensureSchema();
+    const ids = [...new Set(answerIds)];
+    if (ids.length === 0) return 0;
+    const rows = (await this.sql`
+      WITH d AS (
+        DELETE FROM shared_answers WHERE account_hash = ${accountHash} AND origin = 'connector' AND answer_id = ANY(${ids}::text[]) RETURNING 1
       ) SELECT count(*)::int AS n FROM d
     `) as unknown as Array<{ n: number | string }>;
     return Number(rows[0]?.n ?? 0);

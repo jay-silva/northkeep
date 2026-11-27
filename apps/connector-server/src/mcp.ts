@@ -29,7 +29,7 @@
  * (counts + disclosed ids, never text — mirrors packages/mcp-server/src/log.ts).
  */
 
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   PROJECT_DOC_CAP_MESSAGE,
@@ -51,9 +51,28 @@ import {
 import { z } from 'zod';
 import { BASE_NEW, type ConnectorStorage, type SharedEntry } from './storage.js';
 import { projectScopeView, staleProjectRowIds } from './project-head.js';
-import { ConnectorCryptoError, decryptRow, encryptRow, isEncryptedRow } from './crypto.js';
+import { ConnectorCryptoError, decryptAnswer, decryptRow, encryptAnswer, encryptRow, isEncryptedRow } from './crypto.js';
+import {
+  CORRECT_MAX,
+  MAX_PENDING_ANSWERS,
+  SAID_MAX,
+  holdsNoteMarker,
+  isCloudAnswer,
+  northkeepNote,
+  noteCode,
+  notePhraseFor,
+  pairKey,
+  pickOf,
+  startsWithNorthKeep,
+  stripNoteMarker,
+  vaultStatesOf,
+  type AnswerChoice,
+  type AnswerState,
+  type CloudAnswerPlain,
+  type NotePhrase,
+} from './answers.js';
 import { checkSave, excerptFor, isProjectPaperwork, rankSharedEntries, saveNormalForm } from './search-rules.js';
-import { tameAppName } from './text-safe.js';
+import { flatLine, tameAppName } from './text-safe.js';
 import { HOSTED_SECTION_TEXT_RULES, firstProjectTextError, isProjectStatusDone, projectStatusTooLongMessage, STATUS_TEXT_RULES } from './project-text.js';
 import {
   MILESTONES_HEADING,
@@ -107,6 +126,21 @@ function memoryLine(entry: SharedEntry, query: string): string {
     ? `- [${entry.scope}] ${text} (part of a longer memory; read all of it with fetch, id ${entry.entryId})`
     : `- [${entry.scope}] ${text} (id ${entry.entryId})`;
 }
+
+/** ADR 0092 section 1: a memory_retrieve line beside the note, folded to one line, the note's opening words removed. */
+function retrieveLine(entry: SharedEntry, query: string): string {
+  const { text, cut } = excerptFor(flatLine(entry.content), query);
+  const line = stripNoteMarker(text);
+  return cut
+    ? `- [${entry.scope}] ${line} (part of a longer memory; read all of it with fetch, id ${entry.entryId})`
+    : `- [${entry.scope}] ${line} (id ${entry.entryId})`;
+}
+
+const NOT_LIVE = 'Nothing was recorded: one of these ids is not a live memory you can read.';
+export const ANSWER_RECORDED =
+  "Recorded. The user's device decides at its next sync whether this is accepted or waits for the user's yes.";
+const ANSWERS_FULL =
+  "Nothing was recorded: the user's devices have not synced with Cloud Connect for a while, so earlier answers are still waiting. Ask the user to choose Sync now in NorthKeep on their Mac.";
 
 /** ADR 0085 D3: the device's hold advice, word for word. The connector has no masking tier, so replaces is always offered. */
 export const SAVE_HOLD_ADVICE =
@@ -265,6 +299,7 @@ export const CONNECTOR_TOOL_ANNOTATIONS = {
   project_get: READ_ONLY_ANNOTATIONS,
   memory_forget: DESTRUCTIVE_ANNOTATIONS,
   memory_remember: WRITE_ANNOTATIONS,
+  memory_resolve: WRITE_ANNOTATIONS,
   project_create: WRITE_ANNOTATIONS,
   project_update: WRITE_ANNOTATIONS,
 } as const;
@@ -297,7 +332,56 @@ export function createMcpServer(
   async function decryptEntry(e: SharedEntry): Promise<SharedEntry | null> {
     if (!isEncryptedRow(e.content)) return allowLegacyPlaintext ? e : null;
     const plain = await decryptRow(e.content, accountHash, dek);
-    return { ...e, type: plain.type, content: plain.content, confirmed: plain.confirmed === true, archive: plain.archive === true };
+    return {
+      ...e,
+      type: plain.type,
+      content: plain.content,
+      confirmed: plain.confirmed === true,
+      archive: plain.archive === true,
+      ...(plain.chat ? { chat: plain.chat } : {}),
+    };
+  }
+
+  /** ADR 0092: every answered pair by pair key, from the device's set and the Cloud answers still waiting here. */
+  async function answerStates(): Promise<Map<string, { state: AnswerState; pending?: boolean }[]>> {
+    const byKey = new Map<string, { state: AnswerState; pending?: boolean }[]>();
+    const add = (key: string, rec: { state: AnswerState; pending?: boolean }) => byKey.set(key, [...(byKey.get(key) ?? []), rec]);
+    for (const a of await storage.listAnswers(accountHash)) {
+      let plain: unknown;
+      try {
+        plain = await decryptAnswer(a.content, accountHash, dek);
+      } catch {
+        continue; // The note is advice: a record that will not open is left out, never shown.
+      }
+      if (a.origin === 'vault') for (const p of vaultStatesOf(plain)) add(p.pair_key, { state: p.state });
+      else if (isCloudAnswer(plain)) add(plain.pair_key, { state: 'waiting', pending: true });
+    }
+    return byKey;
+  }
+
+  /** Returned pairs that already have a record, by id and fixed words, for the note. */
+  async function answeredAmong(entries: readonly SharedEntry[]): Promise<{ first: string; second: string; phrase: NotePhrase }[]> {
+    if (entries.length < 2) return [];
+    const states = await answerStates();
+    if (states.size === 0) return [];
+    const out: { first: string; second: string; phrase: NotePhrase }[] = [];
+    for (let i = 0; i < entries.length; i += 1) {
+      for (let j = i + 1; j < entries.length; j += 1) {
+        const a = entries[i]!;
+        const b = entries[j]!;
+        if (a.scope !== b.scope) continue;
+        const records = (states.get(await pairKey(a.scope, a.content, b.content)) ?? []).filter((r) => r.state !== 'void');
+        const phrase = notePhraseFor(records);
+        if (phrase !== null) out.push({ first: a.entryId, second: b.entryId, phrase });
+      }
+    }
+    return out;
+  }
+
+  /** Section 1's note, only beside two or more memories. */
+  async function noteFor(entries: readonly SharedEntry[]): Promise<string | null> {
+    if (entries.length < 2) return null;
+    return northkeepNote(noteCode((n) => randomBytes(n)), await answeredAmong(entries));
   }
 
   /**
@@ -380,9 +464,11 @@ export function createMcpServer(
       });
 
       const text = ranked.length
-        ? `Shared memories for "${query}":\n` + ranked.map((e) => memoryLine(e, query ?? '')).join('\n')
+        ? `Shared memories for "${query}":\n` + ranked.map((e) => retrieveLine(e, query ?? '')).join('\n')
         : `No shared memories matched "${query}".`;
-      return { content: [{ type: 'text', text }] };
+      // ADR 0092 section 1: the note is its own block, never inside the memory list.
+      const note = await noteFor(ranked);
+      return { content: [{ type: 'text' as const, text }, ...(note === null ? [] : [{ type: 'text' as const, text: note }])] };
     },
   );
 
@@ -758,9 +844,133 @@ export function createMcpServer(
 
       // No `url`: a private shared memory has no user-openable web address, and
       // ChatGPT only emits a citation when url is non-empty (omitting is honest).
-      const results = ranked.map((e) => ({ id: e.entryId, title: titleFor(e), snippet: snippetOf(e.content) }));
-      const structuredContent = { results };
+      const results = ranked.map((e) => ({ id: e.entryId, title: stripNoteMarker(titleFor(e)), snippet: stripNoteMarker(snippetOf(e.content)) }));
+      const note = await noteFor(ranked);
+      const structuredContent = { results, ...(note === null ? {} : { northkeep_note: note }) };
       return { structuredContent, content: [{ type: 'text', text: JSON.stringify(structuredContent) }] };
+    },
+  );
+
+  // ---- memory_resolve: an answer the user gave in a Cloud app (ADR 0092) ----
+  // Recorded here, encrypted, changing no memory. The user's device takes it in
+  // at its next pull and decides there whether it is accepted or waits.
+  server.registerTool(
+    'memory_resolve',
+    {
+      title: 'Report which memory is right',
+      annotations: CONNECTOR_TOOL_ANNOTATIONS.memory_resolve,
+      description:
+        'Report the answer the user just gave after you asked which of two shared memories is right. Call it only when ' +
+        'two memories from one search state different things about the same matter, you asked the user, and the ' +
+        "user answered in this conversation. Pass both ids, the answer, and the user's own words. NorthKeep records it, " +
+        "and the user's device decides at its next sync whether it is accepted or waits for the user's yes. Until then both memories stay.",
+      inputSchema: {
+        first: z.string().max(256).describe('The id of one memory, as a search returned it'),
+        second: z.string().max(256).describe('The id of the other memory'),
+        answer: z.enum(['first', 'second', 'both', 'neither']).describe('Which is right: first, second, both, or neither'),
+        said: z.string().max(SAID_MAX * 4).describe("The user's own words, one line, at most 200 characters"),
+        correct: z.string().max(MAX_REMEMBER_BYTES).optional().describe('With neither only: the right fact, as the user said it'),
+      },
+    },
+    async ({ first, second, answer, said, correct }) => {
+      const refuse = async (text: string) => {
+        await storage.appendAudit({ ts: new Date().toISOString(), accountHash, tool: 'memory_resolve', params: {}, ok: false, resultCount: 0, resultIds: [] });
+        return { content: [{ type: 'text' as const, text }], isError: true };
+      };
+      let visible: SharedEntry[];
+      try {
+        visible = await memoryEntries();
+      } catch (err) {
+        if (err instanceof ConnectorCryptoError) return reencryptResult('memory_resolve');
+        throw err;
+      }
+      const a = visible.find((e) => e.entryId === (first ?? '').trim());
+      const b = visible.find((e) => e.entryId === (second ?? '').trim());
+      if (a === undefined || b === undefined) return refuse(NOT_LIVE);
+      if (a.entryId === b.entryId) return refuse('Nothing was recorded: both ids name the same memory.');
+      if (a.scope !== b.scope) return refuse('Nothing was recorded: the two memories are in different collections.');
+      if (isProjectPaperwork(a) || isProjectPaperwork(b)) return refuse('Nothing was recorded: project paperwork is settled with the project tools.');
+      const line = flatLine(said ?? '');
+      if (line === '' || startsWithNorthKeep(line) || holdsNoteMarker(line)) return refuse("Nothing was recorded: said must hold the user's own words.");
+      if (line.length > SAID_MAX) return refuse(`Nothing was recorded: said is longer than ${SAID_MAX} characters.`);
+      const fact = (correct ?? '').trim();
+      if (answer !== 'neither' && fact !== '') return refuse('Nothing was recorded: correct goes only with the answer neither.');
+      if (answer === 'neither') {
+        if (fact === '') return refuse('Nothing was recorded: the answer neither needs the right fact in correct.');
+        if (fact.length > CORRECT_MAX) return refuse(`Nothing was recorded: correct is longer than ${CORRECT_MAX} characters.`);
+        if (startsWithNorthKeep(fact) || holdsNoteMarker(fact)) return refuse('Nothing was recorded: correct must hold the right fact.');
+      }
+      let app = '';
+      try {
+        app = tameAppName(await context.appName?.()) ?? '';
+      } catch {
+        app = '';
+      }
+      const key = await pairKey(a.scope, a.content, b.content);
+      const pick = pickOf(answer as AnswerChoice, a.content, b.content);
+      const stored = await storage.listAnswers(accountHash);
+      const waiting: CloudAnswerPlain[] = [];
+      for (const r of stored) {
+        if (r.origin !== 'connector') continue;
+        try {
+          const plain = await decryptAnswer(r.content, accountHash, dek);
+          if (isCloudAnswer(plain)) waiting.push(plain);
+        } catch (err) {
+          if (err instanceof ConnectorCryptoError) return reencryptResult('memory_resolve');
+          throw err;
+        }
+      }
+      // The device makes the full check at its pull; here only what this connector holds.
+      const same = (x: string, y: string) => x.toLowerCase() === y.toLowerCase();
+      if (waiting.some((w) => w.pair_key === key && (same(w.app, app) || w.pick === pick))) {
+        return refuse('Nothing was recorded: this pair is already answered.');
+      }
+      if (waiting.length >= MAX_PENDING_ANSWERS) return refuse(ANSWERS_FULL);
+      let correctId: string | null = null;
+      if (answer === 'neither') {
+        if ((await storage.listEntries(accountHash)).length >= MAX_SHARED_ENTRIES) {
+          return refuse(`Nothing was recorded: this account is at the shared-memory cap (${MAX_SHARED_ENTRIES}).`);
+        }
+        correctId = `conn_${randomUUID().replace(/-/g, '')}`;
+        const type = a.type === b.type ? a.type : 'semantic';
+        await storage.writeConnectorRows(accountHash, a.scope, {
+          expectedSeq: null,
+          rows: [{ entryId: correctId, content: await encryptRow({ accountHash, type, content: fact, app: app || undefined }, dek), baseRevision: null }],
+          replacedId: null,
+        });
+      }
+      const answerId = `ans_${randomBytes(16).toString('hex')}`;
+      const plain: CloudAnswerPlain = {
+        kind: 'connector',
+        pair_key: key,
+        scope: a.scope,
+        first_id: a.entryId,
+        second_id: b.entryId,
+        answer: answer as AnswerChoice,
+        pick,
+        said: line,
+        correct: answer === 'neither' ? fact : null,
+        correct_id: correctId,
+        app,
+        at: new Date().toISOString(),
+      };
+      if (!(await storage.putCloudAnswer(accountHash, answerId, await encryptAnswer(accountHash, plain, dek), MAX_PENDING_ANSWERS))) {
+        return refuse(ANSWERS_FULL);
+      }
+      await storage.appendAudit({
+        ts: new Date().toISOString(),
+        accountHash,
+        tool: 'memory_resolve',
+        params: {},
+        ok: true,
+        resultCount: 1,
+        resultIds: [a.entryId, b.entryId],
+      });
+      const text = `${ANSWER_RECORDED} (record ${answerId})`;
+      return {
+        content: [{ type: 'text' as const, text }],
+        structuredContent: { recorded: true, record: answerId, note: ANSWER_RECORDED, ...(correctId !== null ? { saved_fact: { id: correctId, scope: a.scope } } : {}) },
+      };
     },
   );
 

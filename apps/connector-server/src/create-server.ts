@@ -27,7 +27,7 @@
  *     GET    /client/manifest    (Bearer connector_token -> [{entry_id,entry_hash,scope,pending}])
  *     PUT    /client/entries     (Bearer; "make these scopes match" batch push)
  *     DELETE /client/scope/:scope (Bearer; unshare -> delete rows + tombstone)
- *     GET    /client/pending     (Bearer; connector-born rows to down-sync; ?v=2 adds ADR 0063 fields; ?v=3 adds ADR 0085 replaces)
+ *     GET    /client/pending     (Bearer; connector-born rows to down-sync; ?v=2 adds ADR 0063 fields; ?v=3 adds ADR 0085 replaces; ?v=4 adds ADR 0092 answers)
  *     POST   /client/ack         (Bearer; applied rows -> vault ids, applied or dead replaces)
  *     POST   /client/discard     (Bearer; delete named pending rows, ADR 0063)
  *     POST /debug/seed           (test-only, env-gated; seed shared rows)
@@ -58,6 +58,7 @@ import type { ClientSecretBinder } from './client-secrets.js';
 import { maintenanceConfigFromEnv, runMaintenance, type MaintenanceConfig } from './maintenance.js';
 import { ipRateLimitKey } from './ip-key.js';
 import { createMcpServer } from './mcp.js';
+import { isCloudAnswer, parsePushedAnswers, type VaultAnswerState } from './answers.js';
 import { tameAppName } from './text-safe.js';
 import { CONSENT_PAGE_HEADERS, renderConsentPage } from './consent.js';
 import { createRateLimiter, rateLimitFromEnv, type RateLimiter } from './rate-limit.js';
@@ -75,8 +76,11 @@ import {
   KEK_LABEL_CONNECTOR_TOKEN,
   KEK_LABEL_PAIRING_CODE,
   KEK_LABEL_TOKEN,
+  chatMark,
+  decryptAnswer,
   deriveKek,
   decryptRow,
+  encryptAnswer,
   encryptRow,
   generateDek,
   isEncryptedRow,
@@ -803,6 +807,13 @@ export function createConnectorServer(
       return;
     }
     const scopes = body.scopes.filter((s): s is string => typeof s === 'string');
+    // ADR 0092: a push without `answers` changes nothing, so an older Mac cannot wipe the set.
+    const rawAnswers = (req.body as { answers?: unknown }).answers;
+    const pushedAnswers: VaultAnswerState[] | null = rawAnswers === undefined ? null : parsePushedAnswers(rawAnswers);
+    if (rawAnswers !== undefined && pushedAnswers === null) {
+      res.status(400).json({ error: 'answers must be a list of { pair_key, state, at }.' });
+      return;
+    }
     if (body.entries.length > MAX_SHARED_ENTRIES) {
       res.status(413).json({ error: `Too many shared memories (${body.entries.length}). The cap is ${MAX_SHARED_ENTRIES} per account.` });
       return;
@@ -847,6 +858,7 @@ export function createConnectorServer(
         createdAt: now,
         ...(e.confirmed === true ? { confirmed: true } : {}),
         ...(e.archive === true ? { archive: true } : {}),
+        ...(chatMark(e.chat) ? { chat: chatMark(e.chat)! } : {}),
       });
     }
     // ADR 0020: every row lands as ciphertext. Resolve the account DEK from the
@@ -866,10 +878,10 @@ export function createConnectorServer(
     }
     const encrypted: SharedEntry[] = await Promise.all(
       // The flags ride inside the ciphertext only (ADR 0084 D6), never as stored columns.
-      entries.map(async ({ confirmed, archive, ...e }) => ({
+      entries.map(async ({ confirmed, archive, chat, ...e }) => ({
         ...e,
         type: '',
-        content: await encryptRow({ accountHash, type: e.type, content: e.content, confirmed, archive }, dek),
+        content: await encryptRow({ accountHash, type: e.type, content: e.content, confirmed, archive, chat }, dek),
       })),
     );
     const sharedAt = parseSharedAtMap(body.shared_at);
@@ -914,6 +926,9 @@ export function createConnectorServer(
         });
         return;
       }
+    }
+    if (pushedAnswers !== null) {
+      await storage.replaceVaultAnswers(accountHash, await encryptAnswer(accountHash, { pairs: pushedAnswers }, dek));
     }
     await storage.appendAudit({
       ts: now,
@@ -1090,10 +1105,51 @@ export function createConnectorServer(
         .filter((r) => !dead.includes(r) && !forgottenSet.has(r.oldId) && !forgottenSet.has(r.newId))
         .map((r) => ({ replace_id: r.replaceId, scope: r.scope, old_id: r.oldId, new_id: r.newId }));
     }
+    // ADR 0092: ?v=4 adds the Cloud answers waiting for a device. Only a device that takes them in asks for v4.
+    let answersOut: Array<Record<string, unknown>> | null = null;
+    if (version >= 4) {
+      answersOut = [];
+      const dead: string[] = [];
+      try {
+        const dek = await resolveAccountDek(accountHash, connToken);
+        for (const a of await storage.listAnswers(accountHash)) {
+          if (a.origin !== 'connector') continue;
+          const plain = await decryptAnswer(a.content, accountHash, dek);
+          // Unshare is the revoke: an answer about a revoked scope goes with it.
+          if (!isCloudAnswer(plain) || tombstonedScopes.has(plain.scope)) {
+            dead.push(a.answerId);
+            continue;
+          }
+          answersOut.push({
+            answer_id: a.answerId,
+            scope: plain.scope,
+            first_id: plain.first_id,
+            second_id: plain.second_id,
+            answer: plain.answer,
+            said: plain.said,
+            correct: plain.correct,
+            correct_id: plain.correct_id,
+            app: plain.app,
+            at: plain.at,
+            // The device compares these with its own words for the two ids.
+            pair_key: plain.pair_key,
+            pick: plain.pick,
+          });
+        }
+      } catch (err) {
+        if (err instanceof ConnectorCryptoError) {
+          deny409(res);
+          return;
+        }
+        throw err;
+      }
+      if (dead.length > 0) await storage.dropAnswers(accountHash, dead);
+    }
     res.status(200).json({
       entries: entriesOut,
       forgets: forgets.map((entry_id) => ({ entry_id })),
       ...(replacesOut !== null ? { replaces: replacesOut } : {}),
+      ...(answersOut !== null ? { answers: answersOut } : {}),
     });
   }));
 
@@ -1119,8 +1175,10 @@ export function createConnectorServer(
       return;
     }
     await storage.upsertAccount(accountHash);
-    const body = req.body as { acked?: unknown; forgets?: unknown; replaces?: unknown; keep_forgets?: unknown };
+    const body = req.body as { acked?: unknown; forgets?: unknown; replaces?: unknown; keep_forgets?: unknown; answers?: unknown };
     const acked = Array.isArray(body.acked) ? body.acked : [];
+    // ADR 0092: Cloud answers a v4 device took into its vault, by answer_id.
+    const answerAcks = Array.isArray(body.answers) ? body.answers.filter((r): r is string => typeof r === 'string') : [];
     const forgets = Array.isArray(body.forgets) ? body.forgets : [];
     // ADR 0085 D4: queue entries a v3 device applied or found dead, by replace_id.
     const replaceAcks = Array.isArray(body.replaces) ? body.replaces.filter((r): r is string => typeof r === 'string') : [];
@@ -1133,9 +1191,10 @@ export function createConnectorServer(
     // Cap the batch: each item is a multi-statement Neon transaction run in a
     // sequential loop, so an unbounded array would amplify one authed request
     // into tens of thousands of serial round-trips (pool exhaustion / timeout).
-    if (acked.length + forgets.length + replaceAcks.length + keepForgets.length > MAX_SHARED_ENTRIES) {
+    const items = acked.length + forgets.length + replaceAcks.length + keepForgets.length + answerAcks.length;
+    if (items > MAX_SHARED_ENTRIES) {
       res.status(413).json({
-        error: `Too many items in one ack (${acked.length + forgets.length + replaceAcks.length + keepForgets.length}). The cap is ${MAX_SHARED_ENTRIES}.`,
+        error: `Too many items in one ack (${items}). The cap is ${MAX_SHARED_ENTRIES}.`,
       });
       return;
     }
@@ -1155,17 +1214,19 @@ export function createConnectorServer(
     // After the renames above, which never touch replace_id.
     const replacedCount = await storage.dropReplaces(accountHash, replaceAcks);
     const keptCount = await storage.keepForgets(accountHash, keepForgets);
+    const answeredCount = await storage.dropAnswers(accountHash, answerAcks);
+    const total = ackedCount + forgottenCount + replacedCount + keptCount + answeredCount;
     await storage.appendAudit({
       ts: new Date().toISOString(),
       accountHash,
       tool: 'client_ack',
-      params: { limit: ackedCount + forgottenCount + replacedCount + keptCount },
+      params: { limit: total },
       ok: true,
-      resultCount: ackedCount + forgottenCount + replacedCount + keptCount,
+      resultCount: total,
       resultIds: [],
     });
     // `kept` is how a device knows this connector understands keep_forgets: an older one omits it.
-    res.status(200).json({ ok: true, acked: ackedCount, forgotten: forgottenCount, replaces: replacedCount, kept: keptCount });
+    res.status(200).json({ ok: true, acked: ackedCount, forgotten: forgottenCount, replaces: replacedCount, kept: keptCount, answers: answeredCount });
   }));
 
   // POST /client/discard -> ADR 0063: delete exactly these pending rows by id
@@ -1354,6 +1415,8 @@ function putBodyHasNul(body: unknown): boolean {
     for (const raw of b.entries) {
       const e = (raw ?? {}) as Record<string, unknown>;
       if ([e.entry_id, e.scope, e.entry_hash].some(hasNul)) return true;
+      const chat = (e.chat ?? {}) as Record<string, unknown>;
+      if (hasNul(chat.app) || hasNul(chat.at)) return true;
     }
   }
   if (b.shared_at && typeof b.shared_at === 'object') {
@@ -1364,8 +1427,9 @@ function putBodyHasNul(body: unknown): boolean {
 
 /** Any id in an ack body that storage could not hold. */
 function ackBodyHasNul(body: unknown): boolean {
-  const b = (body ?? {}) as { acked?: unknown; forgets?: unknown; replaces?: unknown; keep_forgets?: unknown };
+  const b = (body ?? {}) as { acked?: unknown; forgets?: unknown; replaces?: unknown; keep_forgets?: unknown; answers?: unknown };
   if (Array.isArray(b.forgets) && b.forgets.some(hasNul)) return true;
+  if (Array.isArray(b.answers) && b.answers.some(hasNul)) return true;
   if (Array.isArray(b.keep_forgets) && b.keep_forgets.some(hasNul)) return true;
   if (Array.isArray(b.replaces) && b.replaces.some(hasNul)) return true;
   if (Array.isArray(b.acked)) {
