@@ -6,6 +6,7 @@ import { initMobilePlatform } from '../src/platform';
 import { VaultSessionProvider, useVaultSession } from '../src/lib/vault-session';
 import { WarningBanner, colors } from '../src/ui';
 import { BottomNav } from '../src/BottomNav';
+import { REVIEW_TITLE } from '../src/lib/review-view';
 
 function LockOnBackground({ children }: { children: React.ReactNode }) {
   const session = useVaultSession();
@@ -120,6 +121,8 @@ export default function RootLayout() {
               {/* Section screens: no back arrow — the bottom nav switches between them. */}
               <Stack.Screen name="projects" options={{ title: 'Projects', headerBackVisible: false }} />
               <Stack.Screen name="project/[slug]" options={{ title: 'Project' }} />
+              {/* ADR 0095: what needs a yes. The screen draws its own "Review" heading. */}
+              <Stack.Screen name="review" options={{ title: REVIEW_TITLE, headerBackVisible: false }} />
               <Stack.Screen name="settings" options={{ title: 'Settings', headerBackVisible: false }} />
               {/* Legacy chat, pushed from Settings now that it has no tab, so it keeps the back arrow. */}
               <Stack.Screen name="converse" options={{ title: 'Converse' }} />
