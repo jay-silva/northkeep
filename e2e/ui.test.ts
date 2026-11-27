@@ -225,7 +225,7 @@ describe('GUI server', () => {
 
   it('export matches the schema and the log endpoint answers', async () => {
     const exported = await api('/api/export');
-    expect((exported.body.northkeep_export as { schema_version: string }).schema_version).toBe('0.4');
+    expect((exported.body.northkeep_export as { schema_version: string }).schema_version).toBe('0.5');
     const log = await api('/api/log');
     expect(Array.isArray(log.body.calls)).toBe(true);
   });
