@@ -11,6 +11,8 @@ import {
   projectScope,
   sharedEntryCapBytes,
   tameOneLine,
+  CONFIRMED_METADATA_KEY,
+  type CloudAnswerIn,
   type MemoryEntry,
   type MemoryType,
   type Vault,
@@ -73,6 +75,28 @@ export interface PushEntry {
   confirmed?: true;
   /** ADR 0084 D3: old project paperwork search skips. Sent only when true, same envelope. */
   archive?: true;
+  /** ADR 0092: the user's answer in a conversation marked it (level 1): the app and date only, same envelope. */
+  chat?: { app: string; at: string };
+}
+
+/** ADR 0092 section 8: a pair's state for the connector's note. No words, no memory ids. */
+export interface PushedAnswerState {
+  pair_key: string;
+  state: string;
+  at: string;
+}
+
+/** What a push reads from the vault, or from a snapshot of it. `answerStatesForPush` is absent on an older snapshot. */
+export type PushSource = Pick<Vault, 'list' | 'sharedScopeRows'> & {
+  answerStatesForPush?: (scopes: readonly string[]) => PushedAnswerState[] | null;
+};
+
+/** The level 1 mark as the envelope carries it; null for none or the user's own mark. */
+export function chatMarkOf(metadata: Record<string, unknown> | null | undefined): { app: string; at: string } | null {
+  const mark = metadata?.[CONFIRMED_METADATA_KEY] as { by?: unknown; app?: unknown; at?: unknown } | undefined;
+  if (typeof mark !== 'object' || mark === null || mark.by !== 'chat') return null;
+  if (typeof mark.app !== 'string' || typeof mark.at !== 'string') return null;
+  return { app: tameOneLine(mark.app, 200), at: mark.at.slice(0, 40) };
 }
 
 export interface ManifestEntry {
@@ -259,7 +283,7 @@ export async function pushSharedScopes(opts: {
   deviceSecret: Buffer;
   scopes: string[];
   /** An open vault, or a snapshot of one taken under the vault lock (ADR 0063 D5). */
-  vault: Pick<Vault, 'list' | 'sharedScopeRows'>;
+  vault: PushSource;
   /** Optional entitlement attestation forwarded to the connector's billing gate. */
   entitlement?: string;
   /** ADR 0063 D5: the vault-sync copy this push was taken from. Absent on a device with no vault sync. */
@@ -283,6 +307,7 @@ export async function pushSharedScopes(opts: {
         content: e.content,
         ...(isConfirmed(e.metadata) ? { confirmed: true as const } : {}),
         ...(isMarkedArchive(e.metadata) ? { archive: true as const } : {}),
+        ...((mark) => (mark === null ? {} : { chat: mark }))(chatMarkOf(e.metadata)),
       });
     }
   }
@@ -292,6 +317,8 @@ export async function pushSharedScopes(opts: {
   for (const row of opts.vault.sharedScopeRows()) {
     if (scopes.includes(row.scope) && row.shared_at) shared_at[row.scope] = row.shared_at;
   }
+  // Null on a vault without the table: then the field is left out, which changes nothing on the connector.
+  const answers = opts.vault.answerStatesForPush?.(scopes) ?? null;
   const res = await fetch(`${server}/client/entries`, {
     method: 'PUT',
     headers: { ...authHeaders(opts.deviceSecret, opts.entitlement), 'content-type': 'application/json' },
@@ -299,6 +326,7 @@ export async function pushSharedScopes(opts: {
       scopes,
       entries,
       shared_at,
+      ...(answers !== null ? { answers } : {}),
       ...(opts.vaultStamp ? { vault: opts.vaultStamp } : {}),
       ...(opts.reset === true ? { reset: true } : {}),
     }),
@@ -404,6 +432,8 @@ export interface PendingSnapshot {
   forgets: string[];
   /** ADR 0085 D4: empty or absent unless fetched from a connector that has the queue, by a device that confirms them. */
   replaces?: QueuedReplace[];
+  /** ADR 0092: set only when a device that takes answers in asked for them; empty from an older connector. */
+  answers?: CloudAnswerIn[];
 }
 
 /**
@@ -534,6 +564,10 @@ export interface DownSyncResult {
   needs_review: { replacements: PlannedReplacement[]; forgets: PlannedForget[]; cloud_replaces: PlannedCloudReplace[] };
   /** ADR 0095 section 5: replace acks not sent yet (applied or settled); empty unless `holdReplaceAcks` was set. */
   held_replace_acks: string[];
+  /** ADR 0092: Cloud answers taken in this sync (0 when none arrived). */
+  cloud_answers: number;
+  /** ADR 0092 section 4 step 7: answer acks held like replace acks; empty unless `holdReplaceAcks` was set. */
+  held_answer_acks: string[];
 }
 
 /**
@@ -559,20 +593,27 @@ const APP_NAME_MAX = 80;
 /**
  * Fetch the pending rows. `?v=3` (ADR 0085 D4) adds the queued cloud replaces;
  * `replaces: false` asks for `?v=2`, so a device that cannot confirm them (the
- * phone) never sees one. Side effects on the server are idempotent and touch no vault.
+ * phone) never sees one. `answers: true` asks for `?v=4` (ADR 0092), only from a
+ * device that takes Cloud answers in. Side effects on the server are idempotent
+ * and touch no vault.
  */
-export async function fetchPending(opts: { server: string; deviceSecret: Buffer; entitlement?: string; replaces?: boolean }): Promise<PendingSnapshot> {
+export async function fetchPending(opts: { server: string; deviceSecret: Buffer; entitlement?: string; replaces?: boolean; answers?: boolean }): Promise<PendingSnapshot> {
   const wantReplaces = opts.replaces !== false;
-  const first = await fetchPendingVersion(opts, wantReplaces ? 3 : 2);
+  const wantAnswers = wantReplaces && opts.answers === true;
+  const first = await fetchPendingVersion(opts, wantAnswers ? 4 : wantReplaces ? 3 : 2);
   // A connector from before v3 reads `v=3` as no version and withholds project documents; ask again as v2.
-  if (wantReplaces && first.replaces === null) return { ...(await fetchPendingVersion(opts, 2)), replaces: [] };
-  return { ...first, replaces: first.replaces ?? [] };
+  if (wantReplaces && first.replaces === null) {
+    const legacy = await fetchPendingVersion(opts, 2);
+    return { entries: legacy.entries, forgets: legacy.forgets, replaces: [], ...(wantAnswers ? { answers: [] } : {}) };
+  }
+  // A v3 connector answers `v=4` as v3, with no answers field: none wait there.
+  return { entries: first.entries, forgets: first.forgets, replaces: first.replaces ?? [], ...(wantAnswers ? { answers: first.answers ?? [] } : {}) };
 }
 
 async function fetchPendingVersion(
   opts: { server: string; deviceSecret: Buffer; entitlement?: string },
-  version: 2 | 3,
-): Promise<{ entries: PendingRow[]; forgets: string[]; replaces: QueuedReplace[] | null }> {
+  version: 2 | 3 | 4,
+): Promise<{ entries: PendingRow[]; forgets: string[]; replaces: QueuedReplace[] | null; answers: CloudAnswerIn[] | null }> {
   const server = normalizeServer(opts.server);
   const res = await fetch(`${server}/client/pending?v=${version}`, {
     headers: authHeaders(opts.deviceSecret, opts.entitlement),
@@ -585,7 +626,7 @@ async function fetchPendingVersion(
   }
   if (res.status === 409) throw reencryptError();
   if (!res.ok) throw httpError(res.status, 'pending');
-  const body = (await res.json()) as { entries?: unknown; forgets?: unknown; replaces?: unknown };
+  const body = (await res.json()) as { entries?: unknown; forgets?: unknown; replaces?: unknown; answers?: unknown };
   const entries: PendingRow[] = [];
   for (const raw of Array.isArray(body.entries) ? body.entries : []) {
     if (raw === null || typeof raw !== 'object') continue;
@@ -615,7 +656,7 @@ async function fetchPendingVersion(
     if (id) forgets.push(id);
   }
   let replaces: QueuedReplace[] | null = null;
-  if (version === 3 && Array.isArray(body.replaces)) {
+  if (version >= 3 && Array.isArray(body.replaces)) {
     replaces = [];
     for (const raw of body.replaces) {
       if (raw === null || typeof raw !== 'object') continue;
@@ -627,7 +668,36 @@ async function fetchPendingVersion(
       if (replace_id && old_id && new_id && scope) replaces.push({ replace_id, scope, old_id, new_id });
     }
   }
-  return { entries, forgets, replaces };
+  return { entries, forgets, replaces, answers: version >= 4 ? parseCloudAnswers(body.answers) : null };
+}
+
+/** ADR 0092: the delivered answers, shape only; the vault re-checks every one from its own rows. Null when the field is absent. */
+function parseCloudAnswers(raw: unknown): CloudAnswerIn[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: CloudAnswerIn[] = [];
+  for (const item of raw) {
+    if (item === null || typeof item !== 'object') continue;
+    const r = item as Record<string, unknown>;
+    const answer_id = asString(r.answer_id);
+    const first_id = asString(r.first_id);
+    const second_id = asString(r.second_id);
+    if (!answer_id || !first_id || !second_id) continue;
+    out.push({
+      answer_id,
+      scope: asString(r.scope)?.trim() ?? '',
+      first_id,
+      second_id,
+      answer: asString(r.answer) ?? '',
+      said: asString(r.said) ?? '',
+      correct: asString(r.correct),
+      correct_id: asString(r.correct_id),
+      app: tameOneLine(asString(r.app) ?? '', APP_NAME_MAX),
+      at: asString(r.at) ?? '',
+      pair_key: asString(r.pair_key),
+      pick: asString(r.pick),
+    });
+  }
+  return out;
 }
 
 type LocalHead = { kind: 'none' } | { kind: 'one'; id: string; content: string } | { kind: 'several' };
@@ -987,14 +1057,22 @@ export async function applyDownSync(opts: {
   holdReplaceAcks?: boolean;
 }): Promise<DownSyncResult> {
   const clientLabel = new URL(normalizeServer(opts.server)).hostname;
-  const pending = await fetchPending({ ...opts, replaces: opts.additiveOnly !== true });
+  const full = opts.additiveOnly !== true;
+  const pending = await fetchPending({ ...opts, replaces: full, answers: full });
   const applied = applyPendingToVault({ vault: opts.vault, pending, clientLabel, approve: opts.approve, additiveOnly: opts.additiveOnly });
   await discardPending({ ...opts, server_ids: applied.discards });
-  const replaces = opts.holdReplaceAcks === true ? [] : applied.replaces;
-  if (applied.acked.length > 0 || applied.forgets.length > 0 || replaces.length > 0) {
-    await postJson(opts, '/client/ack', { acked: applied.acked, forgets: applied.forgets, ...(replaces.length > 0 ? { replaces } : {}) }, 'ack');
+  const hold = opts.holdReplaceAcks === true;
+  const replaces = hold ? [] : applied.replaces;
+  const answers = hold ? [] : applied.answers;
+  if (applied.acked.length > 0 || applied.forgets.length > 0 || replaces.length > 0 || answers.length > 0) {
+    await postJson(opts, '/client/ack', {
+      acked: applied.acked,
+      forgets: applied.forgets,
+      ...(replaces.length > 0 ? { replaces } : {}),
+      ...(answers.length > 0 ? { answers } : {}),
+    }, 'ack');
   }
-  return { ...applied.result, held_replace_acks: opts.holdReplaceAcks === true ? applied.replaces : [] };
+  return { ...applied.result, held_replace_acks: hold ? applied.replaces : [], held_answer_acks: hold ? applied.answers : [] };
 }
 
 /** One acknowledgement, for a caller that applied to the vault itself (ADR 0095): rows added, and requests settled. */
@@ -1011,6 +1089,28 @@ export async function ackPending(opts: {
   const replaces = opts.replaces ?? [];
   if (acked.length === 0 && forgets.length === 0 && replaces.length === 0) return;
   await postJson(opts, '/client/ack', { acked, forgets, ...(replaces.length > 0 ? { replaces } : {}) }, 'ack');
+}
+
+/**
+ * Everything applyDownSync held back, replaces and Cloud answers, sent once the
+ * vault push has landed (ADR 0095 section 5, ADR 0092 section 4 step 7).
+ */
+export async function ackHeldAfterPush(opts: {
+  server: string;
+  deviceSecret: Buffer;
+  entitlement?: string;
+  held: Pick<DownSyncResult, 'held_replace_acks' | 'held_answer_acks'>;
+}): Promise<{ replaces: number; answers: number }> {
+  const replaces = opts.held.held_replace_acks;
+  const answers = opts.held.held_answer_acks;
+  if (replaces.length === 0 && answers.length === 0) return { replaces: 0, answers: 0 };
+  const reply = await postJson(opts, '/client/ack', {
+    acked: [],
+    forgets: [],
+    ...(replaces.length > 0 ? { replaces } : {}),
+    ...(answers.length > 0 ? { answers } : {}),
+  }, 'ack');
+  return { replaces: typeof reply.replaces === 'number' ? reply.replaces : 0, answers: typeof reply.answers === 'number' ? reply.answers : 0 };
 }
 
 /** Send replace acknowledgements applyDownSync held back, once the vault push has landed. Returns how many the connector dropped. */
@@ -1049,7 +1149,7 @@ export async function declineCloudRequest(opts: {
 
 /** What one apply did to the vault, and what the connector still has to be told. */
 export interface AppliedPending {
-  result: Omit<DownSyncResult, 'held_replace_acks'>;
+  result: Omit<DownSyncResult, 'held_replace_acks' | 'held_answer_acks'>;
   /** Stale or legacy rows to delete by id. */
   discards: string[];
   acked: Array<{ server_id: string; local_entry_id: string }>;
@@ -1061,6 +1161,8 @@ export interface AppliedPending {
   replaces: string[];
   /** Replaces applied to the vault in this run, with the vault ids marked. */
   applied_replaces: Array<{ replace_id: string; old_id: string; new_id: string }>;
+  /** ADR 0092: Cloud answers taken in, or already taken, by answer_id. */
+  answers: string[];
 }
 
 /**
@@ -1197,6 +1299,27 @@ export function applyPendingToVault(opts: {
     wrote = true;
   }
 
+  // ADR 0092 section 4: after additions and replaces, so an answer can name a row this sync added or a replace it left waiting.
+  let answerAcks: string[] = [];
+  let cloudAnswers = 0;
+  if (opts.additiveOnly !== true && opts.pending.answers !== undefined && opts.vault.hasQuestions()) {
+    const replacementIds = new Set<string>();
+    for (const r of opts.pending.replaces ?? []) {
+      for (const id of [r.old_id, r.new_id]) {
+        replacementIds.add(id);
+        const local = localIds.get(id);
+        if (local !== undefined) replacementIds.add(local);
+      }
+    }
+    const added = new Map(acked.filter((a) => addedIds.has(a.server_id)).map((a) => [a.server_id, a.local_entry_id]));
+    const deduped = new Map(plan.dedupes.map((d) => [d.server_id, d.local_entry_id]));
+    const took = opts.vault.takeInCloudAnswers(opts.pending.answers, { deduped, added, replacementIds });
+    answerAcks = took.acks;
+    const delivered = new Set(opts.pending.answers.map((a) => a.answer_id));
+    cloudAnswers = took.records.filter((r) => r.cloud_id !== null && delivered.has(r.cloud_id)).length;
+    if (took.records.length > 0) wrote = true;
+  }
+
   if (wrote) opts.vault.save();
   return {
     result: {
@@ -1211,6 +1334,7 @@ export function applyPendingToVault(opts: {
       deferred: plan.deferred,
       conflicts,
       cloud_replaced: cloudReplaced,
+      cloud_answers: cloudAnswers,
       needs_review: { replacements: unapprovedReplacements, forgets: unapprovedForgets, cloud_replaces: unapprovedReplaces },
     },
     discards: plan.discards.map((d) => d.server_id),
@@ -1219,6 +1343,7 @@ export function applyPendingToVault(opts: {
     applied_forgets: appliedForgets,
     replaces: ackedReplaces,
     applied_replaces: appliedReplaces,
+    answers: answerAcks,
   };
 }
 

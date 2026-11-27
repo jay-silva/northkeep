@@ -41,6 +41,15 @@ export {
   projectScopeInUse,
   isRestoredCopy,
   ClearReplacedError,
+  AnswerRefusedError,
+  UndoAnswerError,
+  type ResolveAnswerInput,
+  type CloudAnswerIn,
+  type CloudAnswerContext,
+  type CloudAnswerTakeIn,
+  UNMAPPED_PULLS_VOID,
+  type ResolveAnswerResult,
+  type WaitingQuestion,
   type VaultHeader,
   type VaultOptions,
 } from './vault.js';
@@ -93,3 +102,4 @@ export {
   projectWorkingMemoryMessage,
 } from './project-working-memory.js';
 export { readNerReply, type NerReplyEntity } from './ner-reply.js';
+export * from './answer-rules.js';

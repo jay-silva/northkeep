@@ -146,9 +146,56 @@ export interface VaultExport {
    * "nothing shared" (fail closed), never as "unknown".
    */
   shared_scopes: ExportedScopeSharing[];
+  /**
+   * ADR 0092: what AI apps reported the user answered, and what became of it.
+   * Bookkeeping outside the hash chain. Missing before 0.5; read as none.
+   */
+  questions?: QuestionRecord[];
 }
 
-export const SCHEMA_VERSION = '0.4';
+/** ADR 0092 section 8: one answer an app reported, or (ADR 0094) one fact to confirm. */
+export interface QuestionRecord {
+  id: string;
+  kind: 'pair' | 'confirm';
+  pair_key: string | null;
+  scope: string;
+  first_id: string;
+  second_id: string | null;
+  state: 'waiting' | 'applied' | 'both' | 'declined' | 'undone' | 'void';
+  reason: string | null;
+  answer: 'first' | 'second' | 'both' | 'neither' | null;
+  /** Which of the pair's two texts, sorted, the answer favours: a, b, both or neither. */
+  pick: 'a' | 'b' | 'both' | 'neither' | null;
+  said: string;
+  correct: string | null;
+  correct_id: string | null;
+  app: string;
+  origin: 'device' | 'cloud';
+  cloud_id: string | null;
+  unmapped_pulls: number;
+  winner_writer: string | null;
+  answered_at: string;
+  applied: QuestionApplied | null;
+  applied_at: string | null;
+  decided_at: string | null;
+}
+
+/** What an accepted answer wrote, so its undo reverses exactly that. */
+export interface QuestionApplied {
+  /** The mark written: "chat" for an answer accepted in chat, "user" for a Yes on the phone. */
+  mark: 'chat' | 'user';
+  /** False when the winner already carried the user's mark, which then stays on undo. */
+  mark_written: boolean;
+  /** Memories marked replaced, each by `winner_new`. */
+  retired: string[];
+  /** The favoured memory as it was, and the row the mark was written on. */
+  winner: string | null;
+  winner_new: string | null;
+  /** Rows given the user's mark by a phone Yes on "both". */
+  marked: string[];
+}
+
+export const SCHEMA_VERSION = '0.5';
 export const GENESIS_HASH = '0'.repeat(64);
 
 /** Thrown when vault_meta.sync_generation is present but not a non-negative integer. */

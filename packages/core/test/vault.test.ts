@@ -528,7 +528,7 @@ describe('schema migration', () => {
 
     const reopened = openVault(); // migration runs inside open
     const exported = reopened.export();
-    expect(exported.northkeep_export.schema_version).toBe('0.4');
+    expect(exported.northkeep_export.schema_version).toBe('0.5');
     expect(reopened.verifyChain().ok).toBe(true);
     expect(reopened.list()[0]!.forgotten_at).toBeNull();
     // ADR 0038 review item 1: migration must never invent a share.
@@ -547,7 +547,7 @@ describe('schema migration', () => {
     vault.close();
 
     const reopened = openVault();
-    expect(reopened.export().northkeep_export.schema_version).toBe('0.4');
+    expect(reopened.export().northkeep_export.schema_version).toBe('0.5');
     // 0.2 → 0.3 must not touch entries or the chain (unlike 0.1 → 0.2).
     expect(reopened.export().northkeep_export.chain_head).toBe(headBefore);
     expect(reopened.verifyChain().ok).toBe(true);
@@ -562,7 +562,7 @@ describe('export', () => {
     const vault = createVault();
     vault.remember({ content: 'exported fact', type: 'identity', metadata: { origin: 'test' } });
     const doc = vault.export();
-    expect(doc.northkeep_export.schema_version).toBe('0.4');
+    expect(doc.northkeep_export.schema_version).toBe('0.5');
     expect(doc.northkeep_export.vault_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(doc.northkeep_export.chain_head).toMatch(/^[0-9a-f]{64}$/);
     expect(doc.memories).toHaveLength(1);
@@ -690,7 +690,7 @@ describe('sync_generation (ADR 0038 addendum, schema 0.4)', () => {
     vault.close();
 
     const reopened = openVault();
-    expect(reopened.export().northkeep_export.schema_version).toBe('0.4');
+    expect(reopened.export().northkeep_export.schema_version).toBe('0.5');
     expect(reopened.getSyncGeneration()).toBe(0);
     expect(reopened.list().map((e) => e.content)).toEqual(['kept']);
     reopened.close();

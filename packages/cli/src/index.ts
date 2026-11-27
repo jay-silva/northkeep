@@ -21,7 +21,7 @@ import {
   type MemoryEntry,
   type MemoryType,
   CONFIRMED_METADATA_KEY,
-  isConfirmed,
+  confirmationLevel,
 } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
 import {
@@ -284,6 +284,30 @@ program
       const entry = vault.confirmMemory(id);
       vault.save();
       console.log(`✓ Confirmed ${entry.id}`);
+    });
+  });
+
+program
+  .command('undo-answer')
+  .description('Undo an answer an AI app reported and NorthKeep accepted: the retired memory comes back and the mark goes (ADR 0092)')
+  .argument('<record>', 'answer record id, q_ and 16 hex, from "northkeep export"')
+  .action(async (record: string) => {
+    await withVault(async (vault) => {
+      const undone = vault.undoAnswer(record.trim());
+      vault.save();
+      console.log(`✓ Undone ${undone.id}`);
+    });
+  });
+
+program
+  .command('unmark')
+  .description('Remove the "confirmed in chat" mark an AI app\'s reported answer gave a memory; your own confirmations stay')
+  .argument('<id>', 'memory id from "northkeep list"')
+  .action(async (id: string) => {
+    await withVault(async (vault) => {
+      const entry = vault.removeMark(id.trim(), 'chat');
+      vault.save();
+      console.log(`✓ Unmarked; the memory is now ${entry.id}`);
     });
   });
 
@@ -1581,7 +1605,8 @@ async function withVault<T>(fn: (vault: Vault) => Promise<T> | T): Promise<T> {
 function printEntry(entry: MemoryEntry): void {
   const shortId = entry.id.slice(0, 8);
   const superseded = entry.superseded_at ? `  (superseded ${entry.superseded_at})` : '';
-  const confirmed = isConfirmed(entry.metadata) ? ' confirmed' : '';
+  const level = confirmationLevel(entry.metadata);
+  const confirmed = level === 2 ? ' confirmed' : level === 1 ? ' confirmed in chat' : '';
   console.log(`[${entry.type}${confirmed}] ${entry.content}`);
   console.log(
     `  id ${shortId}  scope ${entry.scope}  source ${entry.source}` +

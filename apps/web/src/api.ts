@@ -45,7 +45,7 @@ import {
   // secret inside them and is never returned to the page.
   foldSidecarScopesIntoVault,
   connectorPaired,
-  ackCloudReplaces,
+  ackHeldAfterPush,
   applyDownSync,
   isAutoSyncVault,
   assertDeviceCanPush,
@@ -236,7 +236,7 @@ const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 // to match apps/desktop/src-tauri/tauri.conf.json on every release, or the
 // check will misreport. Kept as a constant (not read from a package.json) to
 // avoid bundle-path fragility.
-const APP_VERSION = '0.30.0';
+const APP_VERSION = '0.31.0';
 const RELEASES_LATEST_API = 'https://api.github.com/repos/jay-silva/northkeep/releases/latest';
 const RELEASES_PAGE = 'https://github.com/jay-silva/northkeep/releases/latest';
 
@@ -1221,7 +1221,7 @@ async function dispatch(
     let pushOversize: OversizeSharedEntry | null = null;
     try {
       push = await manualPush(session, config.server, deviceSecret, entitlement, false, async () => {
-        await ackCloudReplaces({ ...conn, replace_ids: down.held_replace_acks });
+        await ackHeldAfterPush({ ...conn, held: down });
       });
     } catch (err) {
       pushError = err instanceof Error ? err.message : String(err);
@@ -1236,6 +1236,7 @@ async function dispatch(
       replaced: down.replaced,
       forgotten: down.forgotten,
       cloud_replaced: down.cloud_replaced,
+      cloud_answers: down.cloud_answers,
       deduped: down.deduped,
       discarded: down.discarded,
       held: down.held,

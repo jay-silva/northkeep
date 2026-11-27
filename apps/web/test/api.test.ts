@@ -468,7 +468,7 @@ function stubConnector(entries: Array<{ server_id: string; scope: string; type: 
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     calls.push(url);
-    if (url.endsWith('/client/pending?v=3')) {
+    if (/\/client\/pending\?v=[34]$/.test(url)) {
       // Post-ADR 0063 hosted creates carry base "new"; ADR 0085 adds the replace queue.
       return new Response(JSON.stringify({ entries: entries.map((e) => ({ ...e, base_revision: 'new', stale: false })), forgets: [], replaces: [] }), { status: 200 });
     }

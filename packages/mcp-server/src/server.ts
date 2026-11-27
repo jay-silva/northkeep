@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -63,6 +63,11 @@ import {
   PROJECT_STATUS_AGENT_MAX_CHARS,
   checkSave,
   isProjectPaperwork,
+  CORRECT_MAX,
+  SAID_MAX,
+  noteCode,
+  northkeepNote,
+  stripNoteMarker,
 } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
 import { createCachedEmbedder, createOllamaEmbedder } from '@northkeep/librarian';
@@ -661,6 +666,18 @@ function saveSource(ctx: ConnContext): string {
   return ctx.host === '' || ctx.host === 'unknown' ? 'mcp' : `mcp:${ctx.host}`;
 }
 
+/** ADR 0092: fixed NorthKeep words for memory_resolve's reply. */
+function resolveReplyText(accepted: boolean, answer: string): string {
+  if (!accepted) return "Recorded. This answer waits for the user's yes on their phone; both memories stay as they are.";
+  if (answer === 'both') return 'Accepted: both memories stay, and this pair is recorded as answered. The user can undo it on their phone.';
+  return 'Accepted: the chosen memory is marked confirmed in chat and the other is marked replaced. The user can undo it on their phone.';
+}
+
+/** Six random hex characters for the note's fence, fresh on every response. */
+function randomBytesForNote(n: number): Buffer {
+  return Buffer.from(randomBytes(n));
+}
+
 /** At Tier 1 a replace is refused as an edit is, so the hold must not offer one. */
 function saveHoldAdvice(): string {
   const separate = 'If it is a separate fact, save it again with distinct set to true.';
@@ -991,14 +1008,18 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             skipProjectPaperwork: true,
           });
           const results = r.results;
-          const entries = results.map((s) => ({ ...publicEntry(s.entry), relevance: Number(s.score.toFixed(3)) }));
+          // ADR 0092 section 1: beside the note, no memory line may carry its opening words.
+          const entries = results.map((s) => ({ ...publicEntry(s.entry), content: stripNoteMarker(s.entry.content), relevance: Number(s.score.toFixed(3)) }));
+          const northkeepNoteText = results.length >= 2
+            ? northkeepNote(noteCode(randomBytesForNote), vault.answeredAmong(results.map((s) => s.entry)))
+            : undefined;
           const note = results.length === 0
             ? (r.mode === 'semantic'
               ? 'No matching memories. Ranked by meaning; try describing it differently.'
               : `No matching memories. Search by meaning was unavailable (${r.reason ?? 'unknown'}); retrieval was keyword-based, try different words.`)
             : (r.mode === 'keyword' ? `Search by meaning was unavailable (${r.reason ?? 'unknown'}); results are keyword-ranked.` : undefined);
           return {
-            payload: { results: entries, search_mode: r.mode, note },
+            payload: { results: entries, search_mode: r.mode, note, northkeep_note: northkeepNoteText },
             result_count: results.length,
             result_ids: results.map((s) => s.entry.id),
             disclosed_scopes: distinctScopes(results.map((s) => s.entry.scope)),
@@ -1109,6 +1130,69 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             payload: { stored: publicEntry(entry) },
             result_id: entry.id,
             disclosed_scopes: [entry.scope],
+          };
+        },
+      ),
+  );
+
+  server.registerTool(
+    'memory_resolve',
+    {
+      title: 'Report which memory is right',
+      description:
+        'Report the answer the user just gave after you asked which of two memories is right. Call it only when ' +
+        'two memories from one search state different things about the same matter, you asked the user, and the ' +
+        "user answered in this conversation. Pass both ids, the answer, and the user's own words. NorthKeep decides " +
+        "whether the answer is accepted now or waits for the user's yes on their phone. Accepted: the chosen memory " +
+        'is marked confirmed in chat and the other is marked replaced, never deleted; the user can undo it on their phone.',
+      inputSchema: {
+        first: idSchema.describe('The id of one memory, as a search returned it'),
+        second: idSchema.describe('The id of the other memory'),
+        answer: z.enum(['first', 'second', 'both', 'neither']).describe('Which is right: first, second, both, or neither'),
+        said: z.string().min(1).max(SAID_MAX).describe("The user's own words, one line"),
+        correct: z.string().min(1).max(CORRECT_MAX).optional().describe('With neither only: the right fact, as the user said it'),
+      },
+    },
+    async ({ first, second, answer, said, correct }) =>
+      run(
+        ctx,
+        'memory_resolve',
+        { id: first },
+        vaultPath,
+        { kind: 'write', mask: 'memory' },
+        (vault, granted) => {
+          // The words may hold Person-N pseudonyms whose map lives in this process (ADR 0060 F5).
+          refuseMemoryWriteUnderMasking(2);
+          if (correct !== undefined) {
+            const scope = vault.list({ allowedScopes: granted }).find((e) => e.id === first)?.scope;
+            if (scope !== undefined && vault.sharedScopes().includes(scope)) {
+              const tooLarge = sharedEntryTooLargeMessage(scope, correct);
+              if (tooLarge !== null) throw new Error(tooLarge);
+            }
+          }
+          const result = vault.resolveAnswer({
+            first,
+            second,
+            answer,
+            said,
+            correct: correct ?? null,
+            app: saveSource(ctx),
+            masked: returnRedactionTier() >= 1,
+            allowedScopes: granted,
+          });
+          vault.save();
+          return {
+            payload: {
+              accepted: result.accepted,
+              waits_for_user: !result.accepted,
+              reason: result.reason,
+              question: result.record.id,
+              stored: result.stored === null ? undefined : publicEntry(result.stored),
+              saved_fact: result.correctEntry === null ? undefined : publicEntry(result.correctEntry),
+              note: resolveReplyText(result.accepted, answer),
+            },
+            result_id: result.stored?.id ?? result.record.id,
+            disclosed_scopes: [result.record.scope],
           };
         },
       ),

@@ -8061,6 +8061,7 @@
     if (r.replaced) changed.push('updated ' + plural(r.replaced, 'project', 'projects'));
     if (r.forgotten) changed.push('removed ' + plural(r.forgotten, 'memory', 'memories'));
     if (r.cloud_replaced) changed.push('replaced ' + plural(r.cloud_replaced, 'memory', 'memories') + ' with a newer version');
+    if (r.cloud_answers) changed.push('took in ' + plural(r.cloud_answers, 'answer', 'answers') + ' from your AI apps');
     lines.push((changed.length ? 'Done. ' + changed.join(', ').replace(/^./, (c) => c.toUpperCase()) + '.' : 'Done. Nothing new from your AI apps.') +
       (r.push_error ? '' : ' Sent ' + plural(r.pushed || 0, 'memory', 'memories') + ' to Cloud Connect.'));
     const waiting = ((r.needs_review && r.needs_review.replacements) || []).length + ((r.needs_review && r.needs_review.forgets) || []).length + ((r.needs_review && r.needs_review.cloud_replaces) || []).length;

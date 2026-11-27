@@ -27,6 +27,11 @@ export interface Platform {
    * every vault action already waits in one line.
    */
   checkFileBeforeSave?: boolean;
+  /**
+   * ADR 0092: the phone opens a 0.5 vault but never makes the 0.4 to 0.5 step
+   * itself, so a phone updated first cannot lock out a Mac not yet updated.
+   */
+  makeSchemaSteps?: boolean;
 }
 
 let defaultPlatform: Platform | null = null;

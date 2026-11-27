@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  REVIEW_EMPTY_ACCEPTED,
   acceptedLead,
+  answerAppLine,
+  answerYesLine,
   buttonLabels,
+  chatSinceLine,
   checkedLine,
+  reportedAnswer,
+  reportedLead,
   retiredLabel,
   clockTime,
   dayLabel,
@@ -63,6 +69,34 @@ describe('the Review tab copy', () => {
     expect([tabBadge(0), tabBadge(-2), tabBadge(3), tabBadge(120), tabBadge(Number.NaN)]).toEqual([null, null, '3', '99+', null]);
     expect([tabLabel(0), tabLabel(1), tabLabel(3)]).toEqual(['Review', 'Review, 1 needs your yes', 'Review, 3 need your yes']);
     expect([badgeNumber(0), badgeNumber(-1), badgeNumber(4.9), badgeNumber(5000), badgeNumber(Number.NaN)]).toEqual([0, 0, 4, 999, 0]);
+  });
+
+  it('words an answer an app reported as a report, never as what the person said (ADR 0092)', () => {
+    expect(reviewHeading('answer')).toBe('Settle a disagreement?');
+    expect(buttonLabels('answer')).toEqual({ yes: 'Yes, apply it', no: 'No', later: 'Not now' });
+    expect(reportedLead('Cloud Two')).toBe('Cloud Two (as the app reported) reported you said:');
+    expect((['first', 'second', 'both', 'neither'] as const).map(reportedAnswer)).toEqual([
+      'Reported answer: 1 is right.',
+      'Reported answer: 2 is right.',
+      'Reported answer: both are right.',
+      'Reported answer: neither; it reported the right fact as:',
+    ]);
+    expect(answerYesLine('second')).toBe('Yes marks 2 as confirmed by you and 1 as replaced by it. You can undo this.');
+    expect([chatSinceLine(0), chatSinceLine(Number.NaN), chatSinceLine(1), chatSinceLine(3)]).toEqual([
+      null,
+      null,
+      '1 answer was accepted in chat since you last looked. It is under Accepted lately, with an Undo.',
+      '3 answers were accepted in chat since you last looked. They are under Accepted lately, each with an Undo.',
+    ]);
+    expect([
+      acceptedLead({ kind: 'answer', by: 'chat', state: 'applied' }),
+      acceptedLead({ kind: 'answer', by: 'chat', state: 'both' }),
+      acceptedLead({ kind: 'answer', by: 'phone', state: 'both' }),
+      acceptedLead({ kind: 'answer', state: 'declined' }),
+      acceptedLead({ kind: 'answer', state: 'void' }),
+    ]).toEqual(['Accepted in chat', 'Both kept in chat', 'You said yes on this phone', 'Declined', 'Not used']);
+    expect([answerAppLine('Cloud Two'), answerAppLine(undefined)]).toEqual(['App: Cloud Two (as the app reported)', 'App: a connected app (as the app reported)']);
+    expect(REVIEW_EMPTY_ACCEPTED).toContain('Answers your AI apps settle in chat');
   });
 
   it('labels the old text of an undone yes as brought back, not retired', () => {

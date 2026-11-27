@@ -19,6 +19,7 @@ import {
   needsShowAll,
   splitYesAcks,
   type AcceptedLine,
+  type AnswerOutcome,
   type CloudRequest,
   type NeedsYesItem,
   type NeedsYesList,
@@ -36,6 +37,7 @@ export const REVIEW_OLDER_CONNECTOR = "NorthKeep's server could not record that 
 export const REVIEW_SAVED_NOT_LISTED = 'Saved on this phone, but this phone could not list it under Accepted lately, so it cannot be undone here.';
 export const REVIEW_SAVED_NOT_SENT = 'Saved on this phone. Your AI apps will see it after your devices next sync.';
 export const reviewUndoRefused = (reason: string): string => `This can't be undone here: ${reason}.`;
+export const reviewAnswerRefused = (reason: string): string => `Nothing changed: ${reason}.`;
 
 /** What the phone keeps outside the vault: ids, kinds and times. Never memory text. */
 export interface ReviewState {
@@ -45,6 +47,8 @@ export interface ReviewState {
   notNow: Record<string, string>;
   /** The item ids of the last refresh, for the count between refreshes. */
   lastItemIds: string[];
+  /** When the list was last read, for the line that counts answers accepted in chat since (ADR 0092). */
+  lookedAt?: string;
 }
 
 export const EMPTY_REVIEW_STATE: ReviewState = { records: [], notNow: {}, lastItemIds: [] };
@@ -70,6 +74,10 @@ export interface ReviewPorts {
   /** Under the vault gate: re-check, apply one request, save. */
   applyYes(pending: PendingSnapshot, itemId: string, shownHash: string): Promise<YesOutcome>;
   applyUndo(record: YesRecord, shownHash: string): Promise<UndoOutcome>;
+  /** ADR 0092, under the vault gate: one Yes or No on a waiting answer, re-checked against what was shown, saved. */
+  applyAnswer(itemId: string, shownHash: string, decision: 'yes' | 'no'): Promise<AnswerOutcome>;
+  /** ADR 0092, under the vault gate: one Undo of an accepted answer. */
+  undoAnswer(lineId: string, shownHash: string): Promise<UndoOutcome>;
   ack(body: { acked: Array<{ server_id: string; local_entry_id: string }>; forgets: string[]; replaces: string[] }): Promise<void>;
   decline(request: CloudRequest): Promise<{ settled: boolean }>;
   /** Push the saved vault to the sync server, as every save on the phone does. */
@@ -86,6 +94,8 @@ export interface ReviewView {
   hidden: number;
   waiting_on_mac: number;
   accepted: AcceptedLine[];
+  /** Answers accepted in chat, with nobody tapping, since the list was last read. */
+  chat_since: number;
   checked_at: string;
 }
 
@@ -110,23 +120,33 @@ export function reviewCount(state: ReviewState, now: Date): number {
 }
 
 /** Read the queues and the vault; write nothing to either. Updates the kept ids and the badge. */
-export async function refreshReview(ports: ReviewPorts): Promise<ReviewView> {
+/** `looked` is set only by the Review screen, so a background count never resets "since you last looked". */
+export async function refreshReview(ports: ReviewPorts, opts: { looked?: boolean } = {}): Promise<ReviewView> {
   const pending = await ports.fetchPending();
   const needs = await ports.list(pending);
   const now = ports.now();
   const state = await ports.loadState();
   const notNow = liveNotNow(state.notNow, now);
   const items = needs.items.filter((i) => !(i.id in notNow));
-  const next: ReviewState = { records: state.records, notNow, lastItemIds: needs.items.map((i) => i.id) };
+  const accepted = await ports.accepted(state.records);
+  const lookedAt = opts.looked === true ? now.toISOString() : state.lookedAt;
+  const next: ReviewState = { records: state.records, notNow, lastItemIds: needs.items.map((i) => i.id), ...(lookedAt !== undefined ? { lookedAt } : {}) };
   await ports.saveState(next);
   await ports.setBadge(items.length);
   return {
     items,
     hidden: needs.items.length - items.length,
     waiting_on_mac: needs.waiting_on_mac,
-    accepted: await ports.accepted(next.records),
+    accepted,
+    chat_since: chatSince(accepted, state.lookedAt),
     checked_at: now.toISOString(),
   };
+}
+
+/** Answers settled in chat after `lookedAt`. The first read counts none, so an upgrade does not announce old answers. */
+export function chatSince(lines: readonly AcceptedLine[], lookedAt: string | undefined): number {
+  if (lookedAt === undefined) return 0;
+  return lines.filter((l) => l.kind === 'answer' && l.by === 'chat' && (l.state === 'applied' || l.state === 'both') && l.at > lookedAt).length;
 }
 
 export type ReviewResult =
@@ -162,9 +182,26 @@ async function pushAfterDecision(
   }
 }
 
+/**
+ * ADR 0092: a Yes or No on an answer an app reported, or the Undo of one,
+ * changes only the vault. The same in-sync check as a Yes, then the vault
+ * push carries it; Cloud Connect hears through the push, never an ack.
+ */
+async function answerDecision(ports: ReviewPorts, step: 'decide' | 'undo', run: () => Promise<AnswerOutcome | UndoOutcome>): Promise<ReviewResult> {
+  const sync = await ports.syncCheck();
+  if (sync === 'behind') return { kind: 'refused', message: REVIEW_NOT_IN_SYNC };
+  const out = await run();
+  if (out.status === 'changed') return { kind: 'changed', message: REVIEW_CHANGED, ...('item' in out && out.item ? { item: out.item } : {}) };
+  if (out.status === 'gone') return { kind: 'refused', message: REVIEW_SETTLED };
+  if (out.status === 'refused') return { kind: 'refused', message: step === 'undo' ? reviewUndoRefused(out.reason) : reviewAnswerRefused(out.reason) };
+  const note = await pushAfterDecision(ports, sync === 'in-sync', null);
+  return note === undefined ? { kind: 'done' } : { kind: 'done', note };
+}
+
 /** One Yes. `opened` says the person has opened "Show all" on this card. */
-export async function yesReview(ports: ReviewPorts, item: Pick<NeedsYesItem, 'id' | 'hash' | 'boxes'>, opened: boolean): Promise<ReviewResult> {
+export async function yesReview(ports: ReviewPorts, item: Pick<NeedsYesItem, 'id' | 'hash' | 'boxes'> & { kind?: NeedsYesItem['kind'] }, opened: boolean): Promise<ReviewResult> {
   if (needsShowAll(item) && !opened) return { kind: 'refused', message: REVIEW_SHOW_ALL_FIRST };
+  if (item.kind === 'answer') return answerDecision(ports, 'decide', () => ports.applyAnswer(item.id, item.hash, 'yes'));
   const sync = await ports.syncCheck();
   if (sync === 'behind') return { kind: 'refused', message: REVIEW_NOT_IN_SYNC };
   const hasSyncServer = sync === 'in-sync';
@@ -203,7 +240,8 @@ async function keepRecords(ports: ReviewPorts, change: (records: YesRecord[]) =>
 }
 
 /** One Undo of a Yes given on this phone, as careful as the Yes. */
-export async function undoReview(ports: ReviewPorts, line: Pick<AcceptedLine, 'id' | 'hash'>): Promise<ReviewResult> {
+export async function undoReview(ports: ReviewPorts, line: Pick<AcceptedLine, 'id' | 'hash'> & { kind?: AcceptedLine['kind'] }): Promise<ReviewResult> {
+  if (line.kind === 'answer') return answerDecision(ports, 'undo', () => ports.undoAnswer(line.id, line.hash));
   const sync = await ports.syncCheck();
   if (sync === 'behind') return { kind: 'refused', message: REVIEW_NOT_IN_SYNC };
   const state = await ports.loadState();
@@ -219,10 +257,12 @@ export async function undoReview(ports: ReviewPorts, line: Pick<AcceptedLine, 'i
   return note === undefined ? { kind: 'done' } : { kind: 'done', note };
 }
 
-/** One No: drop the request on the connector. The vault is untouched, so no in-sync check. */
-export async function noReview(ports: ReviewPorts, item: Pick<NeedsYesItem, 'request'>): Promise<ReviewResult> {
+/** One No: drop the request on the connector. The vault is untouched, so no in-sync check. An answer's No is a vault write. */
+export async function noReview(ports: ReviewPorts, item: Pick<NeedsYesItem, 'request'> & Partial<Pick<NeedsYesItem, 'id' | 'hash'>>): Promise<ReviewResult> {
+  const request = item.request;
+  if (request.kind === 'answer') return answerDecision(ports, 'decide', () => ports.applyAnswer(item.id ?? `answer:${request.record_id}`, item.hash ?? '', 'no'));
   try {
-    const { settled } = await ports.decline(item.request);
+    const { settled } = await ports.decline(request);
     return settled ? { kind: 'done' } : { kind: 'refused', message: REVIEW_SETTLED };
   } catch (err) {
     if (err instanceof OlderConnectorError) return { kind: 'refused', message: REVIEW_OLDER_CONNECTOR };
@@ -254,7 +294,8 @@ export function parseReviewState(raw: string | null): ReviewState {
       for (const [id, until] of Object.entries(v.notNow)) if (typeof until === 'string') notNow[id] = until;
     }
     const lastItemIds = Array.isArray(v.lastItemIds) ? v.lastItemIds.filter((id): id is string => typeof id === 'string') : [];
-    return { records, notNow, lastItemIds };
+    const lookedAt = typeof v.lookedAt === 'string' && !Number.isNaN(Date.parse(v.lookedAt)) ? v.lookedAt : undefined;
+    return { records, notNow, lastItemIds, ...(lookedAt !== undefined ? { lookedAt } : {}) };
   } catch {
     return EMPTY_REVIEW_STATE;
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OlderConnectorError, type AcceptedLine, type AppliedPending, type NeedsYesItem, type YesOutcome, type YesRecord } from '@northkeep/sync';
+import { OlderConnectorError, type AcceptedLine, type AnswerOutcome, type AppliedPending, type NeedsYesItem, type YesOutcome, type YesRecord } from '@northkeep/sync';
 import {
   EMPTY_REVIEW_STATE,
   REVIEW_CHANGED,
@@ -9,11 +9,13 @@ import {
   REVIEW_SAVED_NOT_SENT,
   REVIEW_SETTLED,
   REVIEW_SHOW_ALL_FIRST,
+  chatSince,
   nextMidnight,
   noReview,
   notNowReview,
   parseReviewState,
   refreshReview,
+  reviewAnswerRefused,
   reviewCount,
   undoReview,
   yesReview,
@@ -40,13 +42,14 @@ const item = (id: string, text = 'The harbor office is at Pier 4.'): NeedsYesIte
 });
 
 const applied = (over: Partial<AppliedPending> = {}): AppliedPending => ({
-  result: { added: 0, replaced: 0, forgotten: 0, deduped: 0, discarded: 0, held: 0, held_scopes: [], skipped: 0, deferred: 0, conflicts: [], cloud_replaced: 0, needs_review: { replacements: [], forgets: [], cloud_replaces: [] } },
+  result: { added: 0, replaced: 0, forgotten: 0, deduped: 0, discarded: 0, held: 0, held_scopes: [], skipped: 0, deferred: 0, conflicts: [], cloud_replaced: 0, cloud_answers: 0, needs_review: { replacements: [], forgets: [], cloud_replaces: [] } },
   discards: [],
   acked: [],
   forgets: [],
   applied_forgets: [],
   replaces: [],
   applied_replaces: [],
+  answers: [],
   ...over,
 });
 
@@ -57,7 +60,7 @@ const replaceYes: YesOutcome = {
   applied: applied({ acked: [{ server_id: 'conn_1', local_entry_id: 'new' }], replaces: ['r1', 'r-settled'], applied_replaces: [{ replace_id: 'r1', old_id: 'old', new_id: 'new' }], forgets: ['f-settled'] }),
 };
 
-function world(over: Partial<{ sync: 'in-sync' | 'behind' | 'no-server'; push: VaultPushOutcome; yes: YesOutcome; items: NeedsYesItem[]; now: Date; state: ReviewState; cloudFails: boolean }> = {}) {
+function world(over: Partial<{ sync: 'in-sync' | 'behind' | 'no-server'; push: VaultPushOutcome; yes: YesOutcome; answer: AnswerOutcome; items: NeedsYesItem[]; lines: AcceptedLine[]; now: Date; state: ReviewState; cloudFails: boolean }> = {}) {
   const calls: string[] = [];
   let state: ReviewState = over.state ?? EMPTY_REVIEW_STATE;
   let now = over.now ?? new Date(2026, 10, 26, 15, 0, 0);
@@ -74,7 +77,10 @@ function world(over: Partial<{ sync: 'in-sync' | 'behind' | 'no-server'; push: V
       return { entries: [], forgets: [], replaces: [] };
     },
     list: async () => ({ items: over.items ?? [], waiting_on_mac: 2 }),
-    accepted: async (records) => records.map((r): AcceptedLine => ({ id: r.id, kind: r.kind, at: r.at, state: r.undone_at ? 'undone' : 'applied', box: null, retired: null, can_undo: r.kind === 'replace' && !r.undone_at, hash: `line ${r.id}` })),
+    accepted: async (records) => [
+      ...records.map((r): AcceptedLine => ({ id: r.id, kind: r.kind, at: r.at, state: r.undone_at ? 'undone' : 'applied', box: null, retired: null, can_undo: r.kind === 'replace' && !r.undone_at, hash: `line ${r.id}` })),
+      ...(over.lines ?? []),
+    ],
     applyYes: async (_p, id, hash) => {
       calls.push(`applyYes ${id} ${hash}`);
       return over.yes ?? replaceYes;
@@ -82,6 +88,14 @@ function world(over: Partial<{ sync: 'in-sync' | 'behind' | 'no-server'; push: V
     applyUndo: async (record, hash) => {
       calls.push(`applyUndo ${record.id} ${hash}`);
       return hash === 'stale' ? { status: 'changed' } : hash === 'refuse' ? { status: 'refused', reason: 'the memory that replaced it was forgotten' } : { status: 'undone' };
+    },
+    applyAnswer: async (id, hash, decision) => {
+      calls.push(`applyAnswer ${id} ${hash} ${decision}`);
+      return over.answer ?? { status: 'done' };
+    },
+    undoAnswer: async (id, hash) => {
+      calls.push(`undoAnswer ${id} ${hash}`);
+      return hash === 'stale' ? { status: 'changed' } : hash === 'refuse' ? { status: 'refused', reason: 'the memory it kept was changed since' } : { status: 'undone' };
     },
     ack: async (body) => {
       calls.push(`ack ${JSON.stringify(body)}`);
@@ -318,5 +332,99 @@ describe('a Yes the vault refused', () => {
     const w = world({ yes: { status: 'gone', applied: applied() } });
     await yesReview(w.ports, item('replace:r1'), true);
     expect(w.calls).not.toContain('pushVault');
+  });
+});
+
+const answerItem: NeedsYesItem = {
+  id: 'answer:q1',
+  kind: 'answer',
+  scope: 'harbor',
+  app: 'Cloud Two',
+  arrived: '2026-11-26T14:00:00.000Z',
+  boxes: [
+    { label: '1', memory_id: 'm1', text: 'The ferry leaves at 9.' },
+    { label: '2', memory_id: 'm2', text: 'The ferry leaves at 10.' },
+  ],
+  not_shared_now: false,
+  request: { kind: 'answer', record_id: 'q1' },
+  report: { said: 'It is 10 now, they changed it.', answer: 'second', fact: null },
+  hash: 'hash of q1',
+};
+
+const chatLine = (id: string, at: string, over: Partial<AcceptedLine> = {}): AcceptedLine => ({
+  id,
+  kind: 'answer',
+  at,
+  state: 'applied',
+  by: 'chat',
+  app: 'Cloud Two',
+  box: { label: 'New', memory_id: 'm2', text: 'The ferry leaves at 10.' },
+  retired: null,
+  can_undo: true,
+  hash: `line ${id}`,
+  ...over,
+});
+
+describe('an answer an app reported (ADR 0092)', () => {
+  it('Yes and No are refused when the phone is not in sync, and touch nothing', async () => {
+    const w = world({ sync: 'behind' });
+    expect(await yesReview(w.ports, answerItem, false)).toEqual({ kind: 'refused', message: REVIEW_NOT_IN_SYNC });
+    expect(await noReview(w.ports, answerItem)).toEqual({ kind: 'refused', message: REVIEW_NOT_IN_SYNC });
+    expect(w.calls).toEqual([]);
+  });
+
+  it('Yes writes the vault and pushes it, with no Cloud Connect read and no acknowledgement', async () => {
+    const w = world();
+    expect(await yesReview(w.ports, answerItem, false)).toEqual({ kind: 'done' });
+    expect(w.calls).toEqual(['applyAnswer answer:q1 hash of q1 yes', 'pushVault', 'pushCloud 7']);
+    expect(w.state().records).toEqual([]);
+  });
+
+  it('No is a vault write too, and never declines on the connector', async () => {
+    const w = world();
+    expect(await noReview(w.ports, answerItem)).toEqual({ kind: 'done' });
+    expect(w.calls).toEqual(['applyAnswer answer:q1 hash of q1 no', 'pushVault', 'pushCloud 7']);
+  });
+
+  it('passes on a changed card, a settled one and a refusal, and pushes nothing', async () => {
+    const fresh = { ...answerItem, hash: 'new hash' };
+    const changed = world({ answer: { status: 'changed', item: fresh } });
+    expect(await yesReview(changed.ports, answerItem, false)).toEqual({ kind: 'changed', message: REVIEW_CHANGED, item: fresh });
+    const gone = world({ answer: { status: 'gone' } });
+    expect(await yesReview(gone.ports, answerItem, false)).toEqual({ kind: 'refused', message: REVIEW_SETTLED });
+    const refused = world({ answer: { status: 'refused', reason: 'it was changed since' } });
+    expect(await noReview(refused.ports, answerItem)).toEqual({ kind: 'refused', message: 'Nothing changed: it was changed since.' });
+    expect(reviewAnswerRefused('it was changed since')).toBe('Nothing changed: it was changed since.');
+    for (const w of [changed, gone, refused]) expect(w.calls.filter((c) => c.startsWith('push') || c.startsWith('ack'))).toEqual([]);
+  });
+
+  it('Undo of an answer accepted in chat goes to the vault, not the kept records', async () => {
+    const w = world({ state: { ...EMPTY_REVIEW_STATE, records: [replaceRecord] } });
+    expect(await undoReview(w.ports, { id: 'answer:q1', hash: 'line answer:q1', kind: 'answer' })).toEqual({ kind: 'done' });
+    expect(w.calls).toEqual(['undoAnswer answer:q1 line answer:q1', 'pushVault', 'pushCloud 7']);
+    expect(w.state().records).toEqual([replaceRecord]);
+    expect(await undoReview(w.ports, { id: 'answer:q1', hash: 'refuse', kind: 'answer' })).toEqual({ kind: 'refused', message: "This can't be undone here: the memory it kept was changed since." });
+    expect(await undoReview(w.ports, { id: 'answer:q1', hash: 'stale', kind: 'answer' })).toEqual({ kind: 'changed', message: REVIEW_CHANGED });
+  });
+
+  it('counts answers accepted in chat since the Review screen last looked, and a background read never resets it', async () => {
+    const lines = [
+      chatLine('answer:a', '2026-11-26T15:30:00.000Z'),
+      chatLine('answer:b', '2026-11-26T15:40:00.000Z', { state: 'both' }),
+      chatLine('answer:c', '2026-11-26T15:45:00.000Z', { by: 'phone' }),
+      chatLine('answer:d', '2026-11-26T15:50:00.000Z', { state: 'undone', can_undo: false }),
+      chatLine('answer:e', '2026-11-26T14:00:00.000Z'),
+    ];
+    const w = world({ lines, now: new Date('2026-11-26T16:00:00.000Z') });
+    expect((await refreshReview(w.ports)).chat_since).toBe(0);
+    expect(w.state().lookedAt).toBeUndefined();
+    expect((await refreshReview(w.ports, { looked: true })).chat_since).toBe(0);
+    expect(w.state().lookedAt).toBe('2026-11-26T16:00:00.000Z');
+    w.setNow(new Date('2026-11-26T17:00:00.000Z'));
+    expect(chatSince(lines, '2026-11-26T15:00:00.000Z')).toBe(2);
+    await refreshReview(w.ports);
+    expect(w.state().lookedAt).toBe('2026-11-26T16:00:00.000Z');
+    expect(parseReviewState(JSON.stringify({ ...EMPTY_REVIEW_STATE, lookedAt: 'not a time' }))).toEqual(EMPTY_REVIEW_STATE);
+    expect(parseReviewState(JSON.stringify({ ...EMPTY_REVIEW_STATE, lookedAt: '2026-11-26T16:00:00.000Z' })).lookedAt).toBe('2026-11-26T16:00:00.000Z');
   });
 });

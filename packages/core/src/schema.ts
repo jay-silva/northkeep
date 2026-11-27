@@ -1,4 +1,4 @@
-/** SQLite DDL implementing SPEC/memory-schema.md v0.4.
+/** SQLite DDL implementing SPEC/memory-schema.md v0.5.
  * vault_meta stays key/value TEXT; sync_generation is stored as a decimal
  * integer string (ADR 0038 addendum). */
 export const SCHEMA_DDL = `
@@ -41,4 +41,37 @@ CREATE TABLE IF NOT EXISTS scopes (
   shared    INTEGER NOT NULL DEFAULT 0 CHECK (shared IN (0, 1)),
   shared_at TEXT
 );
+`;
+
+/**
+ * ADR 0092 (schema 0.5): answers AI apps reported, and ADR 0094's facts to
+ * confirm. Bookkeeping outside the hash chain; the rows an answer changes are
+ * in the chain as always. No index and no rowid, so an empty table costs one page: each page
+ * travels with every vault sync.
+ */
+export const QUESTIONS_DDL = `
+CREATE TABLE IF NOT EXISTS questions (
+  id             TEXT PRIMARY KEY,
+  kind           TEXT NOT NULL CHECK (kind IN ('pair','confirm')),
+  pair_key       TEXT,
+  scope          TEXT NOT NULL,
+  first_id       TEXT NOT NULL,
+  second_id      TEXT,
+  state          TEXT NOT NULL CHECK (state IN ('waiting','applied','both','declined','undone','void')),
+  reason         TEXT,
+  answer         TEXT CHECK (answer IS NULL OR answer IN ('first','second','both','neither')),
+  pick           TEXT CHECK (pick IS NULL OR pick IN ('a','b','both','neither')),
+  said           TEXT NOT NULL,
+  correct        TEXT,
+  correct_id     TEXT,
+  app            TEXT NOT NULL,
+  origin         TEXT NOT NULL CHECK (origin IN ('device','cloud')),
+  cloud_id       TEXT,
+  unmapped_pulls INTEGER NOT NULL DEFAULT 0,
+  winner_writer  TEXT,
+  answered_at    TEXT NOT NULL,
+  applied        TEXT,
+  applied_at     TEXT,
+  decided_at     TEXT
+) WITHOUT ROWID;
 `;
