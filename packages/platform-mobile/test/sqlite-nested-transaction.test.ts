@@ -74,7 +74,7 @@ function phoneVault(): Vault {
   return Vault.create({ path: path.join(dir, 'v.nkv'), passphrase: 'test passphrase only', deviceSecret: generateDeviceSecret(), kdf: KDF_INTERACTIVE, platform: phone() });
 }
 
-describe('answers on the phone SQLite driver', () => {
+describe('the phone SQLite driver', () => {
   it('a Yes on a waiting answer applies, and its Undo brings the old memory back', () => {
     const vault = phoneVault();
     const six = vault.remember({ content: 'The fuel dock opens at 6.', type: 'semantic', scope: 'harbor', source: 'cli' });
@@ -87,6 +87,15 @@ describe('answers on the phone SQLite driver', () => {
 
     expect(vault.undoAnswer(record.id).state).toBe('undone');
     expect(vault.list({ scope: 'harbor' }).map((m) => m.content).sort()).toEqual(['The fuel dock opens at 6.', 'The fuel dock opens at 7.']);
+    vault.close();
+  });
+
+  it('an edit made on the phone saves the new text and keeps the old one in history', () => {
+    const vault = phoneVault();
+    const first = vault.remember({ content: 'The fuel dock opens at 6.', type: 'semantic', scope: 'harbor', source: 'cli' });
+    const edited = vault.editMemory(first.id, { content: 'The fuel dock opens at 7.' }, { actor: 'owner' });
+    expect(vault.list({ scope: 'harbor' }).map((m) => m.content)).toEqual(['The fuel dock opens at 7.']);
+    expect(edited.id).not.toBe(first.id);
     vault.close();
   });
 
