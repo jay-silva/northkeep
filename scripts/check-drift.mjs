@@ -80,9 +80,14 @@ export function checkVersions(root) {
   for (const r of v.readme) {
     if (r !== release) problems.push(`README.md says "The current download is ${r}", but the desktop release is ${release}.`);
   }
+  // Merging deploys site/ at once, before the release's download exists, so
+  // the site may point at the previous release until publish. It may never
+  // lead, and a link's tag and file must agree.
   for (const s of v.site) {
-    if (s.tag !== release || s.asset !== release) {
+    if (!SEMVER.test(s.tag) || s.tag !== s.asset || compareVersions(s.tag, release) > 0) {
       problems.push(`${s.file} links to the v${s.tag} download (${s.asset} asset), but the desktop release is ${release}.`);
+    } else if (s.tag !== release) {
+      notes.push(`${s.file} links to v${s.tag}; desktop is ${release} (allowed until the release is published).`);
     }
   }
   return { problems, notes };

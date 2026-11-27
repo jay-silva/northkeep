@@ -51,9 +51,15 @@ describe('version drift', () => {
     expect(problems[0]).toContain('README.md says "The current download is 0.9.4"');
   });
 
-  it('flags site download links that point at another release', () => {
-    const { problems } = checkVersions(repo(release({ site: '1.1.0' })));
-    expect(problems[0]).toContain('site/index.html links to the v1.1.0 download');
+  it('flags site download links that point past the desktop release', () => {
+    const { problems } = checkVersions(repo(release({ site: '1.3.0' })));
+    expect(problems[0]).toContain('site/index.html links to the v1.3.0 download');
+  });
+
+  it('lets the site keep the previous download until publish, with a note', () => {
+    const result = checkVersions(repo(release({ site: '1.1.0' })));
+    expect(result.problems).toEqual([]);
+    expect(result.notes).toEqual(['site/index.html links to v1.1.0; desktop is 1.2.0 (allowed until the release is published).']);
   });
 
   it('lets the iPhone version lag the desktop release, with a note', () => {
