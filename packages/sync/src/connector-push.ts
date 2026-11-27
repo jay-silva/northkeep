@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { thisDevicePhrase, type MemoryEntry, type Vault } from '@northkeep/core';
 import { loadSyncConfig } from './config.js';
 import { isAutoSyncVault, pushVault, syncState, type PushResult } from './client.js';
-import { pushSharedScopes, type ManifestEntry, type PushSharedResult, type VaultStamp } from './connector-client.js';
+import { pushSharedScopes, type ManifestEntry, type PushSharedResult, type PushSource, type VaultStamp } from './connector-client.js';
 import { markConnectorPushed } from './connector-config.js';
 
 /**
@@ -85,24 +85,28 @@ export async function manualVaultStamp(opts: {
 export interface SharedSnapshot {
   scopes: string[];
   fingerprint: string;
-  source: Pick<Vault, 'list' | 'sharedScopeRows'>;
+  source: PushSource;
 }
 
 export function snapshotSharedScopes(vault: Vault): SharedSnapshot {
   const scopes = [...new Set(vault.sharedScopes())].sort();
   const byScope = new Map<string, MemoryEntry[]>(scopes.map((scope) => [scope, vault.list({ scope })]));
   const rows = vault.sharedScopeRows();
+  const answers = vault.answerStatesForPush(scopes);
   const hash = createHash('sha256').update(JSON.stringify(scopes));
   for (const scope of scopes) {
     for (const e of byScope.get(scope) ?? []) hash.update(`\n${e.id} ${e.entry_hash}`);
   }
+  // ADR 0092: an answer's state can change with no entry changing ("both", a No on the phone), and still has to reach the note.
+  if (answers !== null) hash.update(`\nanswers ${JSON.stringify(answers)}`);
   return {
     scopes,
     fingerprint: hash.digest('hex'),
     source: {
       list: (filter?: { scope?: string }) => (filter?.scope !== undefined ? (byScope.get(filter.scope) ?? []) : [...byScope.values()].flat()),
       sharedScopeRows: () => rows,
-    } as Pick<Vault, 'list' | 'sharedScopeRows'>,
+      answerStatesForPush: () => answers,
+    } as PushSource,
   };
 }
 

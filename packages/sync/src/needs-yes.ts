@@ -1,4 +1,4 @@
-import { ClearReplacedError, flatLine, parseProjectSlug, type MemoryEntry, type Vault } from '@northkeep/core';
+import { ClearReplacedError, UndoAnswerError, flatLine, parseProjectSlug, type MemoryEntry, type QuestionRecord, type Vault } from '@northkeep/core';
 import { NO_READABLE_TEXT, applyPendingToVault, planDownSync, type AppliedPending, type PendingSnapshot } from './connector-client.js';
 
 /**
@@ -33,7 +33,8 @@ function boxText(content: string): string {
 }
 
 export interface NeedsYesBox {
-  label: 'Old' | 'New' | 'Memory';
+  /** "1" and "2" are the two memories of a disagreement an app reported (ADR 0092). */
+  label: 'Old' | 'New' | 'Memory' | '1' | '2';
   /** A vault id, or the connector's id for a memory this sync is about to add. */
   memory_id: string;
   /** The full flattened text. The screen decides how much to show. */
@@ -42,10 +43,21 @@ export interface NeedsYesBox {
 
 export type CloudRequest = { kind: 'replace'; replace_id: string } | { kind: 'forget'; entry_id: string };
 
+/** An answer an AI app reported waits in the vault, not on the connector (ADR 0092). */
+export type ReviewRequest = CloudRequest | { kind: 'answer'; record_id: string };
+
+/** What an app reported about a pair, each part flattened; the screen draws them as values and boxes. */
+export interface AnswerReport {
+  said: string;
+  answer: 'first' | 'second' | 'both' | 'neither';
+  /** "neither": the right fact as saved, read from the vault. */
+  fact: { memory_id: string; text: string } | null;
+}
+
 export interface NeedsYesItem {
-  /** Stable across refreshes: `replace:<replace_id>` or `forget:<entry_id>`. */
+  /** Stable across refreshes: `replace:<replace_id>`, `forget:<entry_id>` or `answer:<record id>`. */
   id: string;
-  kind: 'replace' | 'forget';
+  kind: 'replace' | 'forget' | 'answer';
   scope: string;
   /** The app as a safe value. Null for a forget: the connector never recorded who asked. */
   app: string | null;
@@ -54,8 +66,10 @@ export interface NeedsYesItem {
   boxes: NeedsYesBox[];
   /** A forget asked for while its collection was shared, which is not Shared on this device now. */
   not_shared_now: boolean;
-  request: CloudRequest;
-  /** Covers the item id, kind, and every box's memory id, label and full text. Yes refuses when it differs. */
+  request: ReviewRequest;
+  /** An answer only. */
+  report?: AnswerReport;
+  /** Covers the item id, kind, and every box's memory id, label and full text, and a report. Yes refuses when it differs. */
   hash: string;
 }
 
@@ -66,8 +80,53 @@ export interface NeedsYesList {
   waiting_on_mac: number;
 }
 
-function itemHash(id: string, kind: string, boxes: NeedsYesBox[]): string {
-  return JSON.stringify([id, kind, boxes.map((b) => [b.memory_id, b.label, b.text])]);
+function itemHash(id: string, kind: string, boxes: NeedsYesBox[], report?: AnswerReport): string {
+  const boxed = boxes.map((b) => [b.memory_id, b.label, b.text]);
+  return JSON.stringify(report === undefined ? [id, kind, boxed] : [id, kind, boxed, report.answer, report.said, report.fact]);
+}
+
+/** A device app's stored form "mcp:<name>" shows as its name. */
+function answerApp(app: string): string {
+  return appValue(app.startsWith('mcp:') ? app.slice(4) : app);
+}
+
+/**
+ * ADR 0092 section 11: the answers waiting for a yes, oldest first, read from
+ * this vault's own records. Each side is its live head, so an edit shows the
+ * current words. Writes nothing.
+ */
+export function listAnswerItems(vault: Vault): NeedsYesItem[] {
+  if (!vault.hasQuestions()) return [];
+  const items: NeedsYesItem[] = [];
+  for (const { record, first, second } of vault.waitingQuestions()) {
+    if (record.answer === null) continue;
+    const id = `answer:${record.id}`;
+    const boxes: NeedsYesBox[] = [
+      { label: '1', memory_id: first.id, text: boxText(first.content) },
+      { label: '2', memory_id: second.id, text: boxText(second.content) },
+    ];
+    let fact: AnswerReport['fact'] = null;
+    if (record.answer === 'neither') {
+      const saved = record.correct_id === null ? null : vault.liveHead(record.correct_id);
+      fact = saved !== null && saved.forgotten_at === null
+        ? { memory_id: saved.id, text: boxText(saved.content) }
+        : { memory_id: '', text: boxText(record.correct ?? '') };
+    }
+    const report: AnswerReport = { said: flatLine(record.said), answer: record.answer, fact };
+    items.push({
+      id,
+      kind: 'answer',
+      scope: record.scope,
+      app: answerApp(record.app),
+      arrived: record.answered_at,
+      boxes,
+      not_shared_now: false,
+      request: { kind: 'answer', record_id: record.id },
+      report,
+      hash: itemHash(id, 'answer', boxes, report),
+    });
+  }
+  return items;
 }
 
 /** Writes nothing and sends nothing. Project changes are counted, never listed (ADR 0095 section 1). */
@@ -138,6 +197,7 @@ export function listNeedsYes(opts: { vault: Vault; pending: PendingSnapshot }): 
       hash: itemHash(id, 'forget', boxes),
     });
   }
+  items.push(...listAnswerItems(vault));
   return { items, waiting_on_mac: waitingOnMac };
 }
 
@@ -217,20 +277,22 @@ export function applyYesToVault(opts: {
   now?: Date;
 }): YesOutcome {
   const item = listNeedsYes(opts).items.find((i) => i.id === opts.itemId);
-  if (item === undefined) return { status: 'gone' };
+  // An answer is settled in the vault alone, by applyAnswerToVault.
+  if (item === undefined || item.request.kind === 'answer') return { status: 'gone' };
   if (item.hash !== opts.shownHash) return { status: 'changed', item };
-  const approve = item.request.kind === 'replace' ? { replace_ids: [item.request.replace_id] } : { forget_ids: [item.request.entry_id] };
+  const request = item.request;
+  const approve = request.kind === 'replace' ? { replace_ids: [request.replace_id] } : { forget_ids: [request.entry_id] };
   const applied = applyPendingToVault({ vault: opts.vault, pending: opts.pending, clientLabel: opts.clientLabel, approve });
   const at = (opts.now ?? new Date()).toISOString();
-  if (item.request.kind === 'replace') {
-    const replaceId = item.request.replace_id;
+  if (request.kind === 'replace') {
+    const replaceId = request.replace_id;
     const done = applied.applied_replaces.find((r) => r.replace_id === replaceId);
     // The vault refused the mark (it can never apply): the request is settled, and nothing was replaced.
     if (done === undefined) return { status: 'gone', applied };
     return { status: 'applied', applied, record: { id: item.id, kind: 'replace', at, old_id: done.old_id, new_id: done.new_id } };
   }
-  if (!applied.applied_forgets.includes(item.request.entry_id)) return { status: 'gone', applied };
-  return { status: 'applied', applied, record: { id: item.id, kind: 'forget', at, entry_id: item.request.entry_id } };
+  if (!applied.applied_forgets.includes(request.entry_id)) return { status: 'gone', applied };
+  return { status: 'applied', applied, record: { id: item.id, kind: 'forget', at, entry_id: request.entry_id } };
 }
 
 export interface YesAcks {
@@ -258,11 +320,16 @@ export function splitYesAcks(applied: AppliedPending, hasSyncServer: boolean): Y
 }
 
 export interface AcceptedLine {
-  /** The Yes record's item id. */
+  /** The Yes record's item id, or `answer:<record id>`. */
   id: string;
-  kind: 'replace' | 'forget';
+  kind: 'replace' | 'forget' | 'answer';
   at: string;
-  state: 'applied' | 'undone';
+  /** Answers add "both" (kept in chat), "declined" and "void" (an answer that could not be used). */
+  state: 'applied' | 'undone' | 'both' | 'declined' | 'void';
+  /** An answer only: accepted in chat with nobody tapping, or a Yes on this phone. */
+  by?: 'chat' | 'phone';
+  /** An answer only: the reporting app as a safe value. */
+  app?: string;
   /** The memory that replaced the old one, whole and flattened. Null for a forget: its text is gone. */
   box: { label: 'New'; memory_id: string; text: string } | null;
   /** Replace: the text that was retired. */
@@ -273,7 +340,7 @@ export interface AcceptedLine {
 }
 
 /** "Accepted lately" for the Yes records this device kept, newest first. Text comes from the vault, never the record. */
-export function listAccepted(opts: { vault: Vault; records: YesRecord[] }): AcceptedLine[] {
+export function listAccepted(opts: { vault: Vault; records: YesRecord[]; now?: Date }): AcceptedLine[] {
   const rows = new Map(opts.vault.list({ includeSuperseded: true, includeForgotten: true }).map((e) => [e.id, e]));
   const lines: AcceptedLine[] = [];
   for (const record of opts.records) {
@@ -299,7 +366,80 @@ export function listAccepted(opts: { vault: Vault; records: YesRecord[] }): Acce
       hash: JSON.stringify([record.id, 'replace', record.old_id ?? null, oldText, record.new_id ?? null, newText, marked]),
     });
   }
+  lines.push(...listAnswerLines(opts.vault, opts.now ?? new Date()));
   return lines.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+}
+
+/** A void answer stays listed this long, so a lost Cloud answer is not silent. */
+const VOID_SHOWN_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** ADR 0092 section 11: every decided answer, each with an Undo where one exists. Text comes from the vault's live rows. */
+export function listAnswerLines(vault: Vault, now: Date): AcceptedLine[] {
+  if (!vault.hasQuestions()) return [];
+  const lines: AcceptedLine[] = [];
+  for (const record of vault.questionRecords()) {
+    if (record.kind !== 'pair' || record.state === 'waiting') continue;
+    const at = record.decided_at ?? record.applied_at ?? record.answered_at;
+    if (record.state === 'void' && now.getTime() - Date.parse(at) > VOID_SHOWN_MS) continue;
+    const winner = answerWinner(vault, record);
+    const by = record.applied?.mark === 'user' ? 'phone' : 'chat';
+    lines.push({
+      id: `answer:${record.id}`,
+      kind: 'answer',
+      at,
+      state: record.state,
+      ...(record.state === 'applied' || record.state === 'both' ? { by } : {}),
+      app: answerApp(record.app),
+      box: winner === null ? null : { label: 'New', memory_id: winner.id, text: boxText(winner.content) },
+      retired: null,
+      can_undo: record.state === 'applied' || record.state === 'both',
+      hash: JSON.stringify([record.id, record.state, record.applied, winner?.id ?? null, winner === null ? null : boxText(winner.content)]),
+    });
+  }
+  return lines;
+}
+
+/** The memory that won, at its live head: null for "both" and for anything not applied. */
+function answerWinner(vault: Vault, record: QuestionRecord): MemoryEntry | null {
+  const id = record.applied?.winner_new ?? null;
+  if (id === null) return null;
+  const head = vault.liveHead(id);
+  return head === null || head.forgotten_at !== null ? null : head;
+}
+
+export type AnswerOutcome = { status: 'done' } | { status: 'gone' } | { status: 'changed'; item?: NeedsYesItem } | { status: 'refused'; reason: string };
+
+/**
+ * A Yes or a No on one waiting answer, inside the caller's vault section.
+ * Refuses unless the item still waits and is what was shown. Saves on success.
+ */
+export function applyAnswerToVault(opts: { vault: Vault; itemId: string; shownHash: string; decision: 'yes' | 'no' }): AnswerOutcome {
+  const item = listAnswerItems(opts.vault).find((i) => i.id === opts.itemId);
+  if (item === undefined || item.request.kind !== 'answer') return { status: 'gone' };
+  if (item.hash !== opts.shownHash) return { status: 'changed', item };
+  try {
+    if (opts.decision === 'yes') opts.vault.applyWaitingAnswer(item.request.record_id, { first: item.boxes[0]!.memory_id, second: item.boxes[1]!.memory_id });
+    else opts.vault.declineAnswer(item.request.record_id);
+  } catch (err) {
+    if (err instanceof UndoAnswerError) return { status: 'refused', reason: err.reason };
+    throw err;
+  }
+  opts.vault.save();
+  return { status: 'done' };
+}
+
+/** One Undo of an accepted answer, inside the caller's vault section. Saves on success. */
+export function undoAnswerInVault(opts: { vault: Vault; lineId: string; shownHash: string; now?: Date }): UndoOutcome {
+  const line = listAnswerLines(opts.vault, opts.now ?? new Date()).find((l) => l.id === opts.lineId);
+  if (line === undefined || line.hash !== opts.shownHash || !line.can_undo) return { status: 'changed' };
+  try {
+    opts.vault.undoAnswer(opts.lineId.slice('answer:'.length));
+  } catch (err) {
+    if (err instanceof UndoAnswerError) return { status: 'refused', reason: err.reason };
+    throw err;
+  }
+  opts.vault.save();
+  return { status: 'undone' };
 }
 
 export type UndoOutcome = { status: 'undone' } | { status: 'changed' } | { status: 'refused'; reason: string };

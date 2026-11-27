@@ -57,7 +57,7 @@ function stubPending(entries: Array<{ server_id: string; scope: string; type: st
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       // ?v=3 is ADR 0085's queue-reading version; these rows carry no queued replaces.
-      if (url.includes('/client/pending?v=3')) {
+      if (/\/client\/pending\?v=[34]/.test(url)) {
         return new Response(JSON.stringify({ entries: withBase(entries), forgets: [], replaces: [] }), { status: 200 });
       }
       if (url.endsWith('/client/ack')) {
@@ -228,7 +228,7 @@ function stubServer(opts: {
   let ackCalls = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.includes('/client/pending?v=3')) {
+    if (/\/client\/pending\?v=[34]/.test(url)) {
       return new Response(JSON.stringify({ entries: withBase(opts.entries), forgets: opts.forgets ?? [], replaces: [] }), { status: 200 });
     }
     if (url.endsWith('/client/ack')) {

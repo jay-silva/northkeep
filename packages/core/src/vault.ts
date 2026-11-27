@@ -92,6 +92,8 @@ import {
 import {
   acceptedOn,
   acceptsInChat,
+  ANSWER_CHOICES,
+  ANSWER_STATES_PUSH_MAX,
   alreadyAnswered,
   CORRECT_MAX,
   holdsNoteMarker,
@@ -110,7 +112,7 @@ import {
   type QuestionState,
   type WaitReason,
 } from './answer-rules.js';
-import { flatLine } from './text-safe.js';
+import { flatLine, tameOneLine } from './text-safe.js';
 import { ARCHIVE_METADATA_KEY, CONFIRMED_BOOST, CONFIRMED_METADATA_KEY, confirmationLevel, isConfirmed, isMarkedArchive, isProjectPaperwork, lengthPenalty, saveNormalForm, searchTerms, compareSearchResults, weightedMatch, wordWeights } from './search-rules.js';
 
 /**
@@ -240,6 +242,45 @@ export interface ResolveAnswerInput {
   allowedScopes?: string[];
   now?: Date;
 }
+
+/** ADR 0092 section 4: one answer a Cloud app reported, as the connector's pending route delivers it. */
+export interface CloudAnswerIn {
+  answer_id: string;
+  scope: string;
+  /** Connector or vault ids, as the Cloud app named them. */
+  first_id: string;
+  second_id: string;
+  answer: string;
+  said: string;
+  correct: string | null;
+  correct_id: string | null;
+  /** The Cloud app's reported name, tamed to one line. */
+  app: string;
+  at: string;
+  /** Sealed by the connector from the words the app was shown; the vault checks them against its own words. */
+  pair_key?: string | null;
+  pick?: string | null;
+}
+
+/** What one pull knows that the vault does not yet: the rows it deduplicated or added, and the waiting replaces. */
+export interface CloudAnswerContext {
+  /** Connector id to vault id. */
+  deduped: ReadonlyMap<string, string>;
+  added: ReadonlyMap<string, string>;
+  /** Ids a waiting Cloud replace names, connector or vault form. */
+  replacementIds: ReadonlySet<string>;
+  now?: Date;
+}
+
+export interface CloudAnswerTakeIn {
+  /** Connector record ids to acknowledge once the save, and with vault sync the push, has landed. */
+  acks: string[];
+  /** The records written or changed by this pull. */
+  records: QuestionRecord[];
+}
+
+/** An unmapped Cloud answer is dropped after this many pulls. */
+export const UNMAPPED_PULLS_VOID = 3;
 
 export interface ResolveAnswerResult {
   record: QuestionRecord;
@@ -982,6 +1023,54 @@ export class Vault {
     return this.questionRecords({ pairKey: pairKey(scope, textA, textB, this.platform.crypto) });
   }
 
+  /**
+   * Section 1: the pair's earlier records, matched by its current texts or by
+   * the rows each side was edited from, so an Undo or No outlives a changed
+   * word. Picks are restated against the current texts.
+   */
+  private pairHistory(first: MemoryEntry, second: MemoryEntry, key: string, exclude?: string): PriorRecord[] {
+    const back = new Map<string, string[]>();
+    const links = this.db.prepare('SELECT id, superseded_by FROM memories WHERE superseded_by IS NOT NULL').all() as { id: string; superseded_by: string }[];
+    for (const link of links) back.set(link.superseded_by, [...(back.get(link.superseded_by) ?? []), link.id]);
+    const pastOf = (id: string): Set<string> => {
+      const seen = new Set([id]);
+      const queue = [id];
+      while (queue.length > 0) {
+        for (const prev of back.get(queue.pop()!) ?? []) {
+          if (!seen.has(prev)) {
+            seen.add(prev);
+            queue.push(prev);
+          }
+        }
+      }
+      return seen;
+    };
+    const pastFirst = pastOf(first.id);
+    const pastSecond = pastOf(second.id);
+    const near = [...pastFirst, ...pastSecond];
+    // A long edit history reads every record rather than build a query past SQLite's parameter limit.
+    const candidates =
+      near.length > 400
+        ? this.questionRecords()
+        : (this.db
+            .prepare(`SELECT * FROM questions WHERE pair_key = ? OR first_id IN (${near.map(() => '?').join(', ')}) OR second_id IN (${near.map(() => '?').join(', ')})`)
+            .all(key, ...near, ...near) as QuestionRow[]).map(rowToQuestion);
+    const out: PriorRecord[] = [];
+    for (const r of candidates) {
+      if (r.kind !== 'pair' || r.state === 'void' || r.id === exclude || r.reason === 'unmapped') continue;
+      if (r.pair_key === key) {
+        out.push(priorOf(r));
+        continue;
+      }
+      if (r.second_id === null) continue;
+      const kept = pastFirst.has(r.first_id) && pastSecond.has(r.second_id);
+      if (!kept && !(pastSecond.has(r.first_id) && pastFirst.has(r.second_id))) continue;
+      const side = r.answer === 'first' || r.answer === 'second' ? ((r.answer === 'first') === kept ? 'first' : 'second') : r.answer;
+      out.push({ state: r.state as QuestionState, pick: side === null ? r.pick : pickOf(side, first.content, second.content), app: r.app });
+    }
+    return out;
+  }
+
   private acceptedToday(today: string): number {
     return acceptedOn(this.getMetaOptional('answers_day'), this.getMetaOptional('answers_accepted'), today);
   }
@@ -1008,16 +1097,16 @@ export class Vault {
     const said = checkSaid(input.said);
     const correct = checkCorrect(input.answer, input.correct);
     const key = pairKey(first.scope, first.content, second.content, this.platform.crypto);
-    const prior = this.questionRecords({ pairKey: key }).filter((r) => r.state !== 'void');
+    const prior = this.pairHistory(first, second, key);
     const pick = pickOf(input.answer, first.content, second.content);
-    if (alreadyAnswered(prior.map(priorOf), input.app, pick)) throw new AnswerRefusedError('Nothing was recorded: this pair is already answered.');
+    if (alreadyAnswered(prior, input.app, pick)) throw new AnswerRefusedError('Nothing was recorded: this pair is already answered.');
     const winner = input.answer === 'first' ? first : input.answer === 'second' ? second : null;
     const loser = input.answer === 'first' ? second : input.answer === 'second' ? first : null;
     const writer = winner === null ? null : writerOf(winner);
     const today = localDay(now);
     const decision = acceptsInChat({
       masked: input.masked === true,
-      prior: prior.map(priorOf),
+      prior,
       level2: waitsForUser({
         texts: [first.content, second.content, ...(correct === null ? [] : [correct])],
         userConfirmed: isConfirmed(first.metadata) || isConfirmed(second.metadata),
@@ -1064,20 +1153,233 @@ export class Vault {
         this.insertQuestion(record);
         return { record, accepted: false, reason: decision.reason, stored: null, correctEntry };
       }
-      let stored: MemoryEntry | null = null;
-      if (winner !== null && loser !== null) {
-        stored = this.supersedeEntry(winner, {}, 'owner', { [CONFIRMED_METADATA_KEY]: { by: 'chat', app: input.app, at, question: record.id } });
-        this.markReplaced(loser.id, stored.id);
-        record.state = 'applied';
-        record.applied = { mark: 'chat', mark_written: true, retired: [loser.id], winner: winner.id, winner_new: stored.id, marked: [] };
-      } else {
-        record.state = 'both';
-      }
-      record.applied_at = at;
+      const done = this.applyChatAnswer(record, winner, loser, at, today);
+      Object.assign(record, done.fields);
       this.insertQuestion(record);
-      this.countAccepted(today);
-      return { record, accepted: true, reason: null, stored, correctEntry };
+      return { record, accepted: true, reason: null, stored: done.stored, correctEntry };
     })();
+  }
+
+  /**
+   * Section 4, both surfaces: the winner is re-saved with the chat mark and the
+   * other memory marked replaced, never forgotten; "both" changes no memory.
+   * Counts toward the day. The caller writes the returned fields.
+   */
+  private applyChatAnswer(
+    record: QuestionRecord,
+    winner: MemoryEntry | null,
+    loser: MemoryEntry | null,
+    at: string,
+    today: string,
+  ): { stored: MemoryEntry | null; fields: Pick<QuestionRecord, 'state' | 'applied' | 'applied_at'> } {
+    let stored: MemoryEntry | null = null;
+    let fields: Pick<QuestionRecord, 'state' | 'applied' | 'applied_at'> = { state: 'both', applied: null, applied_at: at };
+    if (winner !== null && loser !== null) {
+      stored = this.supersedeEntry(winner, {}, 'owner', { [CONFIRMED_METADATA_KEY]: { by: 'chat', app: record.app, at, question: record.id } });
+      this.markReplaced(loser.id, stored.id);
+      fields = {
+        state: 'applied',
+        applied: { mark: 'chat', mark_written: true, retired: [loser.id], winner: winner.id, winner_new: stored.id, marked: [] },
+        applied_at: at,
+      };
+    }
+    this.countAccepted(today);
+    return { stored, fields };
+  }
+
+  /**
+   * ADR 0092 section 4, at a pull: takes in the answers Cloud apps reported,
+   * maps their ids to this vault's rows, re-checks section 3 from this
+   * vault's own rows and applies what it accepts. Earlier pulls' unmapped
+   * answers are tried again first. Writes no save; the caller saves, then
+   * acknowledges `acks`. An answer already taken in is acknowledged again,
+   * never taken twice.
+   */
+  takeInCloudAnswers(answers: readonly CloudAnswerIn[], ctx: CloudAnswerContext): CloudAnswerTakeIn {
+    this.assertOpen();
+    if (!this.hasQuestions()) return { acks: [], records: [] };
+    const now = ctx.now ?? new Date();
+    const byServerId = this.rowsByServerId();
+    return this.db.transaction((): CloudAnswerTakeIn => {
+      const acks: string[] = [];
+      const records: QuestionRecord[] = [];
+      for (const rec of this.questionRecords()) {
+        if (rec.origin === 'cloud' && rec.state === 'waiting' && rec.reason === 'unmapped') records.push(this.settleCloudAnswer(rec, ctx, byServerId, now));
+      }
+      for (const answer of answers) {
+        if (typeof answer.answer_id !== 'string' || answer.answer_id === '') continue;
+        if (this.questionRecords({ cloudId: answer.answer_id }).length === 0) {
+          const rec = this.cloudRecord(answer, now);
+          this.insertQuestion(rec);
+          records.push(rec.state === 'void' ? rec : this.settleCloudAnswer(rec, ctx, byServerId, now));
+        }
+        acks.push(answer.answer_id);
+      }
+      return { acks, records };
+    })();
+  }
+
+  /** A new Cloud record; void at once when its words fail the device's own checks. */
+  private cloudRecord(answer: CloudAnswerIn, now: Date): QuestionRecord {
+    const at = now.toISOString();
+    const app = tameOneLine(typeof answer.app === 'string' ? answer.app : '', 200) || 'a Cloud app';
+    const choice = ANSWER_CHOICES.includes(answer.answer as AnswerChoice) ? (answer.answer as AnswerChoice) : null;
+    let said = '';
+    let correct: string | null = null;
+    let refused = choice === null;
+    if (choice !== null) {
+      try {
+        said = checkSaid(answer.said);
+        correct = checkCorrect(choice, answer.correct);
+      } catch (err) {
+        if (!(err instanceof AnswerRefusedError)) throw err;
+        refused = true;
+      }
+    }
+    const reportedAt = typeof answer.at === 'string' && !Number.isNaN(Date.parse(answer.at)) ? new Date(answer.at).toISOString() : at;
+    const sealedPick = (['a', 'b', 'both', 'neither'] as const).find((p) => p === answer.pick) ?? null;
+    return {
+      id: `q_${randomBytes(8, this.platform.crypto).toString('hex')}`,
+      kind: 'pair',
+      // Until it settles, the pair key and pick are the connector's; settling compares them with this vault's own.
+      pair_key: typeof answer.pair_key === 'string' && /^[0-9a-f]{64}$/.test(answer.pair_key) ? answer.pair_key : null,
+      scope: typeof answer.scope === 'string' ? answer.scope.trim() : '',
+      first_id: String(answer.first_id ?? ''),
+      second_id: String(answer.second_id ?? ''),
+      state: refused ? 'void' : 'waiting',
+      reason: refused ? 'refused' : 'unmapped',
+      answer: refused ? null : choice,
+      pick: sealedPick,
+      said,
+      correct,
+      correct_id: typeof answer.correct_id === 'string' && answer.correct_id !== '' ? answer.correct_id : null,
+      app,
+      origin: 'cloud',
+      cloud_id: answer.answer_id,
+      unmapped_pulls: 0,
+      winner_writer: null,
+      answered_at: reportedAt,
+      applied: null,
+      applied_at: null,
+      decided_at: refused ? at : null,
+    };
+  }
+
+  /** The earliest row carrying each connector id: an edit copies the id, so a later row means the memory changed. */
+  private rowsByServerId(): Map<string, string> {
+    const out = new Map<string, string>();
+    const rows = this.db.prepare("SELECT id, metadata FROM memories WHERE metadata LIKE '%server_id%' ORDER BY rowid ASC").all() as { id: string; metadata: string }[];
+    for (const row of rows) {
+      let serverId: unknown;
+      try {
+        serverId = (JSON.parse(row.metadata) as { connector?: { server_id?: unknown } }).connector?.server_id;
+      } catch {
+        continue;
+      }
+      if (typeof serverId === 'string' && !out.has(serverId)) out.set(serverId, row.id);
+    }
+    return out;
+  }
+
+  /** Section 4 step 2, in order: deduplicated this pull, a vault row, a pulled row's connector id, added this pull. */
+  private mapConnectorId(id: string, ctx: CloudAnswerContext, byServerId: ReadonlyMap<string, string>): string | null {
+    return ctx.deduped.get(id) ?? (this.rowById(id) !== null ? id : null) ?? byServerId.get(id) ?? ctx.added.get(id) ?? null;
+  }
+
+  /** Section 4 steps 2 to 6 for one Cloud record. */
+  private settleCloudAnswer(rec: QuestionRecord, ctx: CloudAnswerContext, byServerId: ReadonlyMap<string, string>, now: Date): QuestionRecord {
+    const at = now.toISOString();
+    const write = (fields: Partial<Omit<QuestionRecord, 'id'>>): QuestionRecord => {
+      this.updateQuestion(rec.id, fields);
+      return { ...rec, ...fields };
+    };
+    const voided = (reason: string, fields: Partial<Omit<QuestionRecord, 'id'>> = {}) => write({ ...fields, state: 'void', reason, decided_at: at });
+    const reported = [rec.first_id, rec.second_id ?? ''];
+    const forgotten = new Set(this.forgottenConnectorIds());
+    if (rec.answer === null || reported.some((id) => id === '')) return voided('refused');
+    if (reported.some((id) => forgotten.has(id))) return voided('gone');
+    const mapped = reported.map((id) => this.mapConnectorId(id, ctx, byServerId));
+    if (mapped[0] === null || mapped[1] === null) {
+      const pulls = rec.unmapped_pulls + 1;
+      if (pulls >= UNMAPPED_PULLS_VOID) return voided('unmapped', { unmapped_pulls: pulls });
+      return write({ state: 'waiting', reason: 'unmapped', unmapped_pulls: pulls });
+    }
+    const [firstId, secondId] = mapped as [string, string];
+    const correctId = rec.correct_id === null ? null : (this.mapConnectorId(rec.correct_id, ctx, byServerId) ?? rec.correct_id);
+    const ids = { first_id: firstId, second_id: secondId, correct_id: correctId };
+    const first = this.liveHead(firstId);
+    const second = this.liveHead(secondId);
+    if (first === null || second === null || first.forgotten_at !== null || second.forgotten_at !== null) return voided('gone', ids);
+    if (first.id === second.id) return voided('same_row', ids);
+    // A Cloud app reaches Shared collections only; the claim is checked here, not taken from the connector.
+    if (first.scope !== rec.scope || !this.sharedScopes().includes(first.scope)) return voided('refused', ids);
+    try {
+      assertSettleable(first, second);
+    } catch (err) {
+      if (!(err instanceof AnswerRefusedError)) throw err;
+      return voided('refused', ids);
+    }
+    const key = pairKey(first.scope, first.content, second.content, this.platform.crypto);
+    const pick = pickOf(rec.answer, first.content, second.content);
+    const keyed = { ...ids, pair_key: key, pick };
+    if (first.id !== firstId || second.id !== secondId) return write({ ...keyed, state: 'waiting', reason: 'changed' });
+    // Same two texts on opposite ids: the app was shown a swapped pair, so the answer means the other memory.
+    if (rec.pair_key === key && rec.pick !== pick) return voided('mismatch', keyed);
+    const seenHere = rec.pair_key === key;
+    const prior = this.pairHistory(first, second, key, rec.id);
+    if (alreadyAnswered(prior, rec.app, pick)) return voided('answered', keyed);
+    const winner = rec.answer === 'first' ? first : rec.answer === 'second' ? second : null;
+    const loser = rec.answer === 'first' ? second : rec.answer === 'second' ? first : null;
+    const writer = winner === null ? null : writerOf(winner);
+    const named = [...reported, firstId, secondId];
+    const today = localDay(now);
+    const decision = acceptsInChat({
+      masked: false,
+      prior,
+      level2: waitsForUser({
+        texts: [first.content, second.content, ...(rec.correct === null ? [] : [rec.correct])],
+        userConfirmed: isConfirmed(first.metadata) || isConfirmed(second.metadata),
+        replacementWaiting: named.some((id) => ctx.replacementIds.has(id)),
+      }),
+      pick,
+      winnerWriter: writer,
+      reportingApp: rec.app,
+      acceptedToday: this.acceptedToday(today),
+    });
+    const settled = { ...keyed, winner_writer: writer === null ? null : writerLabel(writer) };
+    // Other words than this vault's for these ids, or none sealed: the phone shows the user this vault's words.
+    if (!seenHere) return write({ ...settled, state: 'waiting', reason: 'changed' });
+    if (!decision.accept) return write({ ...settled, state: 'waiting', reason: decision.reason });
+    const done = this.applyChatAnswer({ ...rec, ...settled }, winner, loser, at, today);
+    return write({ ...settled, ...done.fields, reason: null });
+  }
+
+  /**
+   * The pair states a push carries for the connector's note (section 8):
+   * Shared collections only, no words, no ids. One line per pair and state,
+   * newest pairs first, within the connector's limit. Null on a vault
+   * without the table.
+   */
+  answerStatesForPush(scopes: readonly string[]): { pair_key: string; state: string; at: string }[] | null {
+    this.assertOpen();
+    if (!this.hasQuestions()) return null;
+    const shared = new Set(scopes);
+    const byPair = new Map<string, Map<string, string>>();
+    for (const r of this.questionRecords()) {
+      if (r.kind !== 'pair' || r.pair_key === null || r.state === 'void' || r.reason === 'unmapped' || !shared.has(r.scope)) continue;
+      const at = r.decided_at ?? r.applied_at ?? r.answered_at;
+      const states = byPair.get(r.pair_key) ?? new Map<string, string>();
+      if ((states.get(r.state) ?? '') < at) states.set(r.state, at);
+      byPair.set(r.pair_key, states);
+    }
+    const newest = (states: Map<string, string>) => [...states.values()].reduce((a, b) => (a > b ? a : b));
+    const pairs = [...byPair].sort(([, x], [, y]) => newest(y).localeCompare(newest(x)));
+    const out: { pair_key: string; state: string; at: string }[] = [];
+    for (const [pair_key, states] of pairs) {
+      if (out.length + states.size > ANSWER_STATES_PUSH_MAX) break;
+      for (const [state, at] of states) out.push({ pair_key, state, at });
+    }
+    return out;
   }
 
   /** A live memory by its exact id, inside the caller's grant. */
@@ -1164,7 +1466,7 @@ export class Vault {
     if (entries.length < 2 || !this.hasQuestions()) return [];
     const byKey = new Map<string, QuestionRecord[]>();
     for (const r of this.questionRecords()) {
-      if (r.pair_key === null || r.state === 'void') continue;
+      if (r.pair_key === null || r.state === 'void' || r.reason === 'unmapped') continue;
       byKey.set(r.pair_key, [...(byKey.get(r.pair_key) ?? []), r]);
     }
     if (byKey.size === 0) return [];
@@ -1239,7 +1541,7 @@ export class Vault {
       // Each other waiting report on this pair is settled by this Yes.
       if (rec.pair_key !== null) {
         this.db
-          .prepare("UPDATE questions SET state = 'declined', decided_at = ? WHERE pair_key = ? AND state = 'waiting' AND id != ?")
+          .prepare("UPDATE questions SET state = 'declined', decided_at = ? WHERE pair_key = ? AND state = 'waiting' AND reason IS NOT 'unmapped' AND id != ?")
           .run(at, rec.pair_key, rec.id);
       }
       return { ...rec, state, applied, applied_at: at, decided_at: at };

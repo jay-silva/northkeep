@@ -1,6 +1,6 @@
 # ADR 0092: Asked, not guessed: the app raises a disagreement it sees, NorthKeep records the answer under trust rules
 
-Status: Proposed 2026-11-24 (milestone 5) · Draft: three reviews logged, revised 2026-11-25 to Jay's "answer the agent and then accept that"; not yet re-reviewed
+Status: Proposed 2026-11-24 (milestone 5) · Three reviews logged; revised 2026-11-25 to Jay's "answer the agent and then accept that" · Built 2026-11-27 on draft PRs, awaiting Jay's answers
 
 ## Context
 A word rule to find disagreeing memories raised 2 bench questions, none real, and missed six. Jay: "The app raises it"; "O2, no"; on 2026-11-25, "just answer the agent and then accept that". His hand test passed with Grok Bot ("He asked me, and I answered") and Muse ("muse asked which one it was as well").
@@ -15,7 +15,7 @@ A word rule to find disagreeing memories raised 2 bench questions, none real, an
 
 ## Consequences
 - Easier: no word rule; an everyday answer needs no tap.
-- Harder: a Cloud answer is decided at the next pull by a device that can re-check it (Mac Sync now, the command line, or the phone if Jay agrees), not instantly; until then cloud apps see both memories. Schema 0.4 to 0.5 locks out older phones; pending version 4.
+- Harder: a Cloud answer is decided at the Mac's next pull (Sync now, the command line), not instantly; the phone pulls additions only. Until then cloud apps see both memories. Schema 0.5 locks out older phones; pending version 4.
 - Committed to: KNOWN-LIMITS lines; trusting the connector to relay answers honestly; a renamed app, or one assistant under two names, escapes the same-app rule.
 
 ## Rejected

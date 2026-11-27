@@ -1,6 +1,6 @@
 import { devicePhrase, loadDeviceSecret, projectScope, type Vault } from '@northkeep/core';
 import {
-  ackCloudReplaces,
+  ackHeldAfterPush,
   applyDownSync,
   isAutoSyncVault,
   assertDeviceCanPush,
@@ -332,6 +332,9 @@ export async function shareSyncCmd(options: { yes?: boolean }, deps: ShareDeps, 
   if (down.skipped > 0) {
     console.log('  Skipped memories had a type NorthKeep does not store; the app that wrote them can forget them.');
   }
+  if (down.cloud_answers > 0) {
+    console.log(`  ${plural(down.cloud_answers, 'answer', 'answers')} from your AI apps came in. Any that need your yes are on your phone's Review tab.`);
+  }
   const unshown = down.needs_review.replacements.length + down.needs_review.forgets.length + down.needs_review.cloud_replaces.length;
   if (unshown > 0) console.log(`  ${plural(unshown, 'change', 'changes')} arrived after the preview and wait for the next sync.`);
   for (const c of down.conflicts) {
@@ -348,7 +351,7 @@ export async function shareSyncCmd(options: { yes?: boolean }, deps: ShareDeps, 
   let push: PushSharedResult | null;
   try {
     push = await pushNow(cfg, deviceSecret, entitlement, deps, false, async () => {
-      await ackCloudReplaces({ ...conn, replace_ids: down.held_replace_acks });
+      await ackHeldAfterPush({ ...conn, held: down });
     });
   } catch (err) {
     fail(`The changes above were saved on this device, but Cloud Connect was not updated: ${message(err)}`);

@@ -1,6 +1,6 @@
 # Design record: ADR 0092, Asked, not guessed
 
-Milestone 5 of relaunch step 1. This is the long record behind the short ADR. It is a draft. Three reviews are logged below: review 1 did not clear the first version, review 2 cleared the second with wounds, and review 3 cleared the third (the app raises it) with wounds. This fourth version closes review 3's wounds and follows Jay's word of 2026-11-25. It has not been re-reviewed. Nothing here is built.
+Milestone 5 of relaunch step 1. This is the long record behind the short ADR. It is a draft. Three reviews are logged below: review 1 did not clear the first version, review 2 cleared the second with wounds, and review 3 cleared the third (the app raises it) with wounds. This fourth version closes review 3's wounds and follows Jay's word of 2026-11-25. It has not been re-reviewed. Built 2026-11-27 on draft PRs; "Build notes" at the end says where the build differs.
 
 Code references are to main, read with `git show` from the read-only checkout at /Users/jsilva/Claude/Projects/NorthKeep/northkeep. Most lines were read at 1089445. PR 98 has since merged (main is 66ad784, 2026-11-25); what it added is cited at 66ad784, and line numbers in packages/sync/src/connector-client.ts and packages/core/src/vault.ts after its changes moved by up to about 20. Function names are the anchor.
 
@@ -303,7 +303,7 @@ questions
   decided_at     text or null    when declined or undone
 ```
 
-- `pair_key` is BLAKE2b (the vault's `blake2bHex`) of the two `saveNormalForm` texts, sorted, with the scope. It is built from text because marking changes an id.
+- `pair_key` is BLAKE2b (the vault's `blake2bHex`) of the two `saveNormalForm` texts, sorted, with the scope. It is built from text because marking changes an id. On a Cloud answer that has not mapped yet, `pair_key` and `pick` hold what the connector sealed until settling replaces them.
 - States: `waiting` (for the user's yes on the phone); `applied` (accepted in chat, or a Yes on the phone; `applied` says which mark); `both`; `declined` (No on the phone; no memory changed); `undone`; `void` (a memory went away, or the ids never mapped). A void record blocks nothing.
 - `vault_meta` gains `answers_day` (the device's local date) and `answers_accepted`, set under the vault lock.
 - The table is in the export (invariant 4) and in SPEC/memory-schema.md. It is bookkeeping outside the hash chain; the rows an answer writes are in the chain as always. It travels to the phone inside the vault blob.
@@ -593,3 +593,16 @@ ADR 0095 asks the one open phone question (may the phone tell Cloud Connect itse
 2. **Will you run a phone release through the App Store, live before or with the Mac release of this milestone?** The vault's schema step makes every older phone build refuse to open the vault, so without it the phone, and its "Needs your yes" list, stop working the day the Mac updates. Recommendation: yes; one phone build that reads schema 0.5 and the `questions` table. If no: this milestone keeps its records outside the vault file and is redesigned before build.
 
 3. **Do you accept that an AI app's report of your answer can retire up to three everyday memories a day with nobody watching?** Each one is listed on the phone with an Undo, and none touches a number, money, ownership, accounts, work, advisers, dealings, disputes, legal matters or a fact you confirmed. What you are accepting: an app can make up the disagreement or your words; the "not its own memory" check cannot catch an app that renames itself, or one assistant that shows up under two names (on your Mac and through Cloud Connect); and a memory whose writer NorthKeep does not know can win. Recommendation: yes; it is what "answer the agent and then accept that" needs. If no: those answers wait for your tap on the phone, and nothing is accepted in chat.
+
+## Build notes (2026-11-27)
+
+- The phone does not take Cloud answers in. Its pull stays additions-only, so only the Mac's Sync now or the command line takes them. The phone lists answers that vault sync brings it, and settles waiting ones with Yes, No and Undo, all as vault writes.
+- "Since you last looked" counts from the last time the Review screen opened; the phone's background read does not reset it.
+- The connector's full-cap message asks the user to choose Sync now on the Mac.
+- `memory_remember` on the connector needs `type`; Part B step 2 passes it.
+- Part B's step 16 resolves a project document against a memory in the same project collection, so it reaches the paperwork refusal and not the different-collections one.
+- A schema-changing branch must never be built in the checkout Jay's AI apps run their local server from; it would move his real vault to 0.5. All builds ran in a separate clone.
+- The build review (2026-11-27) found three defects, fixed here:
+  - Earlier answers are found by the pair's current texts or by the rows each side was edited from, so an Undo or No outlives an edit (section 6, guard 6).
+  - The pending route delivers the sealed pair key and pick. The Mac compares them with its own words for the two ids: a swapped pair is void (`mismatch`), and other or missing words wait (`changed`). A writer with no key who moves sealed memory rows can no longer get an answer applied in chat; the answer waits, and the phone card shows the vault's words beside the app's report, with no sign that the app saw other words (the recheck's open item, for Jay).
+  - A push carries one line per pair and state, newest pairs first, at most 5,000, the connector's limit.

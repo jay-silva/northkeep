@@ -152,7 +152,7 @@ A vault export is a single JSON document:
 ```json
 {
   "northkeep_export": {
-    "schema_version": "0.4",
+    "schema_version": "0.5",
     "vault_id": "d3b0…",
     "exported_at": "2026-07-04T12:00:00.000Z",
     "chain_head": "9f2c…",
@@ -198,6 +198,10 @@ before 0.3 has no `shared_scopes` key, and a reader MUST treat that as
 "nothing shared" (fail closed), never as "unknown". Embeddings remain
 excluded — they are cache; sharing marks are user state.
 
+Since 0.5 it also carries `questions`: each answer an AI app reported
+about two memories (ADR 0092), with its state and dates, as stored. An
+export without the key has none.
+
 The export is complete: a conforming implementation can rebuild an
 equivalent vault from it, including chain verification and the shared set.
 
@@ -212,7 +216,19 @@ string) and on the export document under `northkeep_export.sync_generation`.
 Missing on a 0.3 vault or export means 0. A 0.3-only build cannot open a
 0.4 vault.
 
+A 0.5 vault adds the `questions` table, and `answers_day` and
+`answers_accepted` in `vault_meta` (the count of answers accepted in chat on
+that device's local day). A phone build opens 0.4 and 0.5 but never makes
+the 0.4 to 0.5 step itself. A 0.4-only build cannot open a 0.5 vault.
+
 **Changelog**
+- **0.5** (2026-11-27): added the `questions` table (ADR 0092): kind
+  (`pair`, `confirm`), the two memory ids, the reported answer and words,
+  the app's name, the state (`waiting`, `applied`, `both`, `declined`,
+  `undone`, `void`) and its dates; the two `vault_meta` keys; and the
+  `questions` export key. Additive; the migration creates the table empty.
+  The chat mark is entry `metadata` (`confirmed: {by: "chat", app, at,
+  question}`). Entry fields and the hash rule are unchanged.
 - **0.4** (2026-08-26): added `vault_meta.sync_generation` and the matching
   export field (ADR 0038 addendum). Additive; migration seeds 0. Entry
   fields and the hash rule are unchanged.

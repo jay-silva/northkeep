@@ -28,6 +28,9 @@ export type WaitReason =
 
 /** At most this many answers are accepted with nobody tapping, per device day. */
 export const DAILY_ACCEPT_CAP = 3;
+
+/** A push carries at most this many pair states; the connector refuses a push with more (its MAX_PUSHED_ANSWER_STATES). */
+export const ANSWER_STATES_PUSH_MAX = 5000;
 export const SAID_MAX = 200;
 export const CORRECT_MAX = 1000;
 

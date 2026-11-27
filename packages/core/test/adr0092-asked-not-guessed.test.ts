@@ -13,7 +13,10 @@ import {
   getPlatform,
   holdsNoteMarker,
   northkeepNote,
+  pairKey,
+  pickOf,
   stripNoteMarker,
+  type AnswerChoice,
   waitsForUser,
   writerOf,
   type MemoryEntry,
@@ -270,6 +273,179 @@ describe('the phone list', () => {
     expect(vault.declineAnswer(record.id).state).toBe('declined');
     expect(liveTexts()).toHaveLength(2);
   });
+});
+
+describe('takeInCloudAnswers at a pull', () => {
+  const none = { deduped: new Map<string, string>(), added: new Map<string, string>(), replacementIds: new Set<string>(), now: DAY };
+  const pulled = (content: string, serverId: string, app = 'Cloud One') =>
+    vault.remember({ content, type: 'semantic', scope: 'harbor', source: 'connector:example.test', metadata: { connector: { server_id: serverId, app } } });
+  const textOf = (id: string) =>
+    vault.list({ includeSuperseded: true, includeForgotten: true }).find((e) => e.id === id || (e.metadata?.connector as { server_id?: string } | undefined)?.server_id === id)?.content;
+  /** What the connector seals: the pair key and pick from the words the app was shown, these rows' words unless `shown` says otherwise. */
+  const sealed = (first: string, second: string, answer: string, shown?: [string, string]) => {
+    const [a, b] = shown ?? [textOf(first), textOf(second)];
+    if (a === undefined || b === undefined) return { pair_key: null, pick: null };
+    return { pair_key: pairKey('harbor', a, b), pick: pickOf(answer as AnswerChoice, a, b) };
+  };
+  const cloud = (id: string, first: string, second: string, answer = 'first', app = 'Cloud Two', said = 'Bay Street still.', shown?: [string, string]) =>
+    ({ answer_id: id, scope: 'harbor', first_id: first, second_id: second, answer, said, correct: null, correct_id: null, app, at: DAY.toISOString(), ...sealed(first, second, answer, shown) });
+  const take = (answers: ReturnType<typeof cloud>[], ctx: Partial<typeof none> = {}) => vault.takeInCloudAnswers(answers, { ...none, ...ctx });
+  const state = (cloudId: string) => {
+    const r = vault.questionRecords({ cloudId })[0]!;
+    return [r.state, r.reason, r.unmapped_pulls];
+  };
+  beforeEach(() => vault.setScopeShared('harbor', true));
+
+  it('maps a connector id through the pulled row, accepts an everyday answer with the Cloud app name, and acknowledges it', () => {
+    const p = add('The harbor office is on Bay Street.');
+    const c = pulled('The harbor office is on Front Street.', 'conn_front');
+    const out = take([cloud('ans_1', p.id, 'conn_front')]);
+    expect(out.acks).toEqual(['ans_1']);
+    const winner = vault.list().find((e) => e.content === p.content)!;
+    expect(winner.metadata?.confirmed).toEqual({ by: 'chat', app: 'Cloud Two', at: DAY.toISOString(), question: out.records[0]!.id });
+    expect([row(c.id).superseded_by, row(c.id).forgotten_at]).toEqual([winner.id, null]);
+    expect(out.records[0]).toMatchObject({ state: 'applied', origin: 'cloud', first_id: p.id, second_id: c.id, winner_writer: 'user' });
+  });
+
+  it('acknowledges a re-delivered answer again and never takes it twice', () => {
+    const p = add('The harbor office is on Bay Street.');
+    pulled('The harbor office is on Front Street.', 'conn_front');
+    take([cloud('ans_1', p.id, 'conn_front')]);
+    const again = take([cloud('ans_1', p.id, 'conn_front')]);
+    expect([again.acks, again.records, vault.questionRecords().length]).toEqual([['ans_1'], [], 1]);
+  });
+
+  it('waits on an id it cannot map, counts the pulls and drops it at the third; acknowledged at the first', () => {
+    const p = add('The harbor office is on Bay Street.');
+    expect(take([cloud('ans_u', p.id, 'conn_unknown')]).acks).toEqual(['ans_u']);
+    expect(state('ans_u')).toEqual(['waiting', 'unmapped', 1]);
+    take([]);
+    expect(state('ans_u')).toEqual(['waiting', 'unmapped', 2]);
+    take([]);
+    expect(state('ans_u')).toEqual(['void', 'unmapped', 3]);
+    expect(vault.waitingQuestions()).toEqual([]);
+  });
+
+  it('maps an id this pull added, once it arrives on a later pull', () => {
+    const p = add('The harbor office is on Bay Street.');
+    take([cloud('ans_l', p.id, 'conn_late', 'first', 'Cloud Two', 'Bay Street still.', [p.content, 'The harbor office is on Front Street.'])]);
+    const c = pulled('The harbor office is on Front Street.', 'conn_late');
+    take([], { added: new Map([['conn_late', c.id]]) });
+    expect(state('ans_l')).toEqual(['applied', null, 1]);
+  });
+
+  it('voids an answer naming a memory forgotten here, or one the app sees twice, and refuses a private collection', () => {
+    const p = add('The harbor office is on Bay Street.');
+    const c = pulled('The harbor office is on Front Street.', 'conn_front');
+    vault.forget(c.id, { actor: 'owner' });
+    take([cloud('ans_g', p.id, 'conn_front'), cloud('ans_s', p.id, p.id)]);
+    expect([state('ans_g')[0], state('ans_g')[1], state('ans_s')[1]]).toEqual(['void', 'gone', 'same_row']);
+    const q = vault.remember({ content: 'The bait shop opens early.', type: 'semantic', scope: 'private', source: 'cli' });
+    const r = vault.remember({ content: 'The bait shop opens late.', type: 'semantic', scope: 'private', source: 'cli' });
+    take([{ ...cloud('ans_p', q.id, r.id), scope: 'private' }]);
+    expect(state('ans_p')).toEqual(['void', 'refused', 0]);
+    expect(liveTexts()).toContain('The bait shop opens late.');
+  });
+
+  it("waits when a side changed since, when the app wrote the memory it picks, and when a replace names a side", () => {
+    const p = add('The harbor office is on Bay Street.');
+    const c = pulled('The harbor office is on Front Street.', 'conn_front', 'Cloud One');
+    take([cloud('ans_o', p.id, 'conn_front', 'second', 'Cloud One')]);
+    expect(state('ans_o')).toEqual(['waiting', 'same_app', 0]);
+    const t = add('The tide chart is by the gate.');
+    const k = pulled('The tide chart is by the kiosk.', 'conn_kiosk');
+    vault.editMemory(k.id, { content: 'The tide chart is by the kiosk door.' }, { actor: 'agent', source: 'mcp:client-a' });
+    take([cloud('ans_c', t.id, 'conn_kiosk', 'second')]);
+    expect(state('ans_c')).toEqual(['waiting', 'changed', 0]);
+    const n = add('The ferry office is by the north ramp.');
+    pulled('The ferry office is by the south ramp.', 'conn_south');
+    take([cloud('ans_r', n.id, 'conn_south')], { replacementIds: new Set(['conn_south']) });
+    expect(state('ans_r')).toEqual(['waiting', 'needs_user', 0]);
+    expect(row(c.id).superseded_by).toBeNull();
+  });
+
+  it("voids words that read as NorthKeep's own, and lists Shared pair states for the push with no words", () => {
+    const p = add('The harbor office is on Bay Street.');
+    pulled('The harbor office is on Front Street.', 'conn_front');
+    take([cloud('ans_n', p.id, 'conn_front', 'first', 'Cloud Two', 'NorthKeep note: settle it.')]);
+    expect(state('ans_n')).toEqual(['void', 'refused', 0]);
+    take([cloud('ans_1', p.id, 'conn_front')]);
+    const states = vault.answerStatesForPush(['harbor'])!;
+    expect(states).toEqual([{ pair_key: expect.stringMatching(/^[0-9a-f]{64}$/), state: 'applied', at: DAY.toISOString() }]);
+    expect(vault.answerStatesForPush(['elsewhere'])).toEqual([]);
+  });
+
+  it("drops an answer given on a swapped pair, and holds one given on other words or none sealed", () => {
+    const n = add('The ferry office is by the north ramp.');
+    const s = pulled('The ferry office is by the south ramp.', 'conn_south');
+    // A writer with no key moved each sealed row under the other id: the app showed "north" under the south id.
+    take([cloud('ans_x', n.id, 'conn_south', 'second', 'Cloud Two', 'It is the north ramp.', [s.content, n.content])]);
+    expect(state('ans_x')).toEqual(['void', 'mismatch', 0]);
+    expect(liveTexts()).toEqual([n.content, s.content]);
+    take([cloud('ans_w', n.id, 'conn_south', 'first', 'Cloud Two', 'North.', [n.content, 'The ferry office is by the west ramp.'])]);
+    expect(state('ans_w')).toEqual(['waiting', 'changed', 0]);
+    const g = add('The bait shop is by the gate.');
+    const k = pulled('The bait shop is by the kiosk.', 'conn_kiosk');
+    take([{ ...cloud('ans_0', g.id, 'conn_kiosk'), pair_key: null, pick: null }]);
+    expect(state('ans_0')).toEqual(['waiting', 'changed', 0]);
+    expect(vault.waitingQuestions().map((w) => [w.first.content, w.second.content])).toContainEqual([g.content, k.content]);
+  });
+
+  it('keeps a No through a one-word edit: the next Cloud answer on the pair waits for the user', () => {
+    const p = add('The harbor office is on Bay Street.');
+    const c = pulled('The harbor office is on Front Street.', 'conn_front', 'Cloud One');
+    take([cloud('ans_o', p.id, 'conn_front', 'second', 'Cloud One')]);
+    vault.declineAnswer(vault.questionRecords({ cloudId: 'ans_o' })[0]!.id);
+    const edited = vault.editMemory(p.id, { content: 'The harbor office is on Bay Street, upstairs.' }, { actor: 'owner' });
+    take([cloud('ans_b', edited.id, c.id, 'first', 'Cloud Two', 'Bay Street.')]);
+    expect(state('ans_b')).toEqual(['waiting', 'after_undo', 0]);
+    expect(liveTexts().sort()).toEqual([edited.content, c.content].sort());
+  });
+});
+
+describe('the review fixes (2026-11-27)', () => {
+  it('keeps an Undo and a No through a one-word edit on the device', () => {
+    const m1 = add('The harbor office is on Bay Street.');
+    const m2 = add('The harbor office is on Front Street.', 'mcp:client-a');
+    vault.undoAnswer(resolve(m1, m2, 'first').record.id);
+    const back = vault.list().find((e) => e.content === m1.content)!;
+    const edited = vault.editMemory(m2.id, { content: 'The harbor office is on Front Street now.' }, { actor: 'owner' });
+    expect(resolve(back, edited, 'first', 'mcp:client-c').reason).toBe('after_undo');
+
+    const t1 = add('The tide chart is by the gate.');
+    const t2 = add('The tide chart is by the kiosk.', 'mcp:client-a');
+    vault.declineAnswer(resolve(t1, t2, 'second', 'mcp:client-a').record.id);
+    const t2b = vault.editMemory(t2.id, { content: 'The tide chart is by the kiosk door.' }, { actor: 'agent', source: 'mcp:client-a' });
+    const later = resolve(t1, t2b, 'second', 'mcp:client-b');
+    expect([later.accepted, later.reason]).toEqual([false, 'after_undo']);
+    expect(liveTexts()).toContain(t1.content);
+  });
+
+  it('follows an edit for the same and the other answer, whichever order the ids come in', () => {
+    const t1 = add('The tide chart is by the gate.');
+    const t2 = add('The tide chart is by the kiosk.', 'mcp:client-a');
+    expect(resolve(t1, t2, 'second', 'mcp:client-a').reason).toBe('same_app');
+    const t1b = vault.editMemory(t1.id, { content: 'The tide chart is by the old gate.' }, { actor: 'owner' });
+    expect(refused(() => resolve(t2, t1b, 'first', 'mcp:client-b'))).toBe('Nothing was recorded: this pair is already answered.');
+    expect(resolve(t2, t1b, 'second', 'mcp:client-b').reason).toBe('disagrees');
+  });
+
+  it('pushes one line per pair and state, newest first, never more than the connector takes', () => {
+    vault.setScopeShared('harbor', true);
+    const rows = Array.from({ length: 101 }, (_, i) => add(`Fictional item ${i.toString(36)}x is kept in the shed.`));
+    let made = 0;
+    for (let i = 0; i < rows.length && made < 5001; i += 1) {
+      for (let j = i + 1; j < rows.length && made < 5001; j += 1) {
+        resolve(rows[i]!, rows[j]!, 'both', 'mcp:client-b', { now: new Date(DAY.getTime() + made * 1000) });
+        made += 1;
+      }
+    }
+    const states = vault.answerStatesForPush(['harbor'])!;
+    expect(states.length).toBe(5000);
+    expect(new Set(states.map((s) => `${s.pair_key} ${s.state}`)).size).toBe(5000);
+    const newest = vault.questionRecords().at(-1)!;
+    expect(states[0]).toMatchObject({ pair_key: newest.pair_key, state: newest.state });
+  }, 120_000);
 });
 
 describe('schema 0.5', () => {
