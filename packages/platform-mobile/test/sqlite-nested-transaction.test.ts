@@ -1,7 +1,7 @@
 /**
- * The vault nests transactions (an answer's Undo removes a mark inside its own
- * transaction). On the phone each Yes and Undo of an answer failed with
- * "cannot rollback - no transaction is active". The fake below is expo-sqlite's
+ * The vault nests transactions (an edit supersedes inside its own transaction).
+ * expo's withTransactionSync cannot nest: the inner BEGIN fails and its ROLLBACK
+ * ends the outer transaction. The fake below is expo-sqlite's
  * sync API over sql.js, with expo's own withTransactionSync.
  */
 import os from 'node:os';
@@ -74,19 +74,13 @@ function phoneVault(): Vault {
   return Vault.create({ path: path.join(dir, 'v.nkv'), passphrase: 'test passphrase only', deviceSecret: generateDeviceSecret(), kdf: KDF_INTERACTIVE, platform: phone() });
 }
 
-describe('answers on the phone SQLite driver', () => {
-  it('a Yes on a waiting answer applies, and its Undo brings the old memory back', () => {
+describe('the phone SQLite driver', () => {
+  it('an edit made on the phone saves the new text and keeps the old one in history', () => {
     const vault = phoneVault();
-    const six = vault.remember({ content: 'The fuel dock opens at 6.', type: 'semantic', scope: 'harbor', source: 'cli' });
-    const seven = vault.remember({ content: 'The fuel dock opens at 7.', type: 'semantic', scope: 'harbor', source: 'mcp:client-a' });
-    const { record } = vault.resolveAnswer({ first: six.id, second: seven.id, answer: 'second', said: 'It opens at 7 now.', app: 'mcp:Harbor Helper' });
-    expect(record.state).toBe('waiting');
-
-    expect(vault.applyWaitingAnswer(record.id).state).toBe('applied');
+    const first = vault.remember({ content: 'The fuel dock opens at 6.', type: 'semantic', scope: 'harbor', source: 'cli' });
+    const edited = vault.editMemory(first.id, { content: 'The fuel dock opens at 7.' }, { actor: 'owner' });
     expect(vault.list({ scope: 'harbor' }).map((m) => m.content)).toEqual(['The fuel dock opens at 7.']);
-
-    expect(vault.undoAnswer(record.id).state).toBe('undone');
-    expect(vault.list({ scope: 'harbor' }).map((m) => m.content).sort()).toEqual(['The fuel dock opens at 6.', 'The fuel dock opens at 7.']);
+    expect(edited.id).not.toBe(first.id);
     vault.close();
   });
 
