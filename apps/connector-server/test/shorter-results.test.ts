@@ -57,7 +57,10 @@ describe('the connector search tool sends less', () => {
     expect(found).toContain('read all of it with fetch, id long-1');
     expect(found).toContain('- [personal] Pat walks to the harbor office');
     expect(found).not.toContain('afterword199');
-    expect(found.length).toBeLessThan(900);
+    // ADR 0092: the note is a fixed second block beside two or more memories; the memories themselves stay short.
+    const [memories, note] = found.split('\nNorthKeep note ');
+    expect(note).toBeDefined();
+    expect(memories!.length).toBeLessThan(900);
 
     const listed = await call('memory_list', {});
     expect(listed).toContain('read all of it with fetch, id long-1');

@@ -133,7 +133,7 @@ for (const kind of ['memory', 'pglite'] as const) {
 
       const res = await w.ack({ acked: [], forgets: [], keep_forgets: [w.slip.id] });
 
-      expect([res.status, res.body]).toEqual([200, { ok: true, acked: 0, forgotten: 0, replaces: 0, kept: 1 }]);
+      expect([res.status, res.body]).toEqual([200, { ok: true, acked: 0, forgotten: 0, replaces: 0, kept: 1, answers: 0 }]);
       expect(await storage.listPendingForgets(w.account)).toEqual([]);
       expect((await storage.getEntry(w.account, w.slip.id))?.entryId).toBe(w.slip.id);
       expect(await w.cloudSees(SLIP)).toBe(true);
@@ -165,7 +165,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       const w = await world();
       await w.mcp('memory_forget', { id: w.slip.id });
       const res = await w.ack({ acked: [], forgets: [w.slip.id] });
-      expect(res.body).toEqual({ ok: true, acked: 0, forgotten: 1, replaces: 0, kept: 0 });
+      expect(res.body).toEqual({ ok: true, acked: 0, forgotten: 1, replaces: 0, kept: 0, answers: 0 });
       expect(await storage.getEntry(w.account, w.slip.id)).toBeNull();
       expect(await storage.listPendingForgets(w.account)).toEqual([]);
     });

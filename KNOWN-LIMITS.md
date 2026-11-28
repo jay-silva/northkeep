@@ -39,9 +39,7 @@ The Review tab lists what an AI app on Cloud Connect asked to change in a memory
 
 ## Answers an AI app reports (ADR 0092), Mac and phone 0.31.0
 
-When an AI app sees two memories that disagree in one search result, NorthKeep's note asks it to ask you which is right and report your answer with `memory_resolve`. An everyday answer is accepted in chat with no tap; anything else waits for your yes on the phone's Review tab. Every accepted answer is listed there with an Undo. It ships in Mac 0.31.0 and phone 0.31.0 (build 36). What it does not do:
-
-- **Answers given in a Cloud app need a Cloud Connect update that is not live yet.** Until it is, only AI apps on your Mac can report an answer.
+When an AI app sees two memories that disagree in one search result, NorthKeep's note asks it to ask you which is right and report your answer with `memory_resolve`. An everyday answer is accepted in chat with no tap; anything else waits for your yes on the phone's Review tab. Every accepted answer is listed there with an Undo. It ships in Mac 0.31.0 and phone 0.31.0 (build 36), and Cloud apps can report answers through Cloud Connect. What it does not do:
 
 - **NorthKeep does not look for memories that disagree.** An AI app that sees two in one result may ask you; one that does not, or ignores NorthKeep's note, never will. Checked by hand on 2026-11-25: Grok Bot and Muse ask. Not checked: Claude, Codex, ChatGPT.
 - **An answer is what an AI app reports you said.** NorthKeep keeps the app's name and the words, and cannot check them. An app can make up the disagreement or your words.
