@@ -18,9 +18,9 @@ What it does, on the Mac (the Mac app, the app in a browser, the command line an
 - **Taking a dead lock is itself guarded for 10 seconds.** A process paused for longer than that in the middle of taking one can, when it resumes, move a live lock aside; the save check then decides which save stands. An app killed at the wrong instant can leave small files beside the vault whose names start with the lock file's name and continue `.tmp-`, `.stale-` or `.steal`. They are harmless. A leftover `.steal` file is cleared by a later app that needs to take a dead lock, at once if the process that left it has exited and otherwise once it is 10 seconds old, unless it belongs to another user in a folder where this user may not move files, in which case dead locks are not taken until it is deleted by hand. The others are not cleaned up.
 - **The separate lock around vault sync transfers still takes over a lock from a running app after about three minutes without progress.** Like the vault lock, it is taken at once when its owner has exited or the Mac has restarted. A sync lock file this user cannot read is never taken over; every sync then says another NorthKeep process is syncing until the file is deleted by hand.
 
-## The phone's Review tab (ADR 0095), built, not yet released
+## The phone's Review tab (ADR 0095), phone 0.31.0 (build 36)
 
-The Review tab lists what an AI app on Cloud Connect asked to change in a memory that needs your yes: a replacement or a deletion. You answer one at a time with Yes, No or Not now. It also lists each Yes given on that phone, with an Undo for a replacement. It ships with the next phone release. What it does not do:
+The Review tab lists what an AI app on Cloud Connect asked to change in a memory that needs your yes: a replacement or a deletion. You answer one at a time with Yes, No or Not now. It also lists each Yes given on that phone, with an Undo for a replacement. It ships in phone 0.31.0 (build 36). What it does not do:
 
 - **It has not run on a real iPhone.** The screen was run in the iOS simulator against a test stand-in for Cloud Connect, with no vault sync set up, and its logic is tested as code; the number on the app icon and its permission prompt are untested on a device.
 - **If your phone saves a change while it is behind your other devices, it keeps its own copy, so a memory you retired on another device can come back without a question.** The phone says it kept its copy and saves the other one as a backup. A Yes or an Undo on the phone is refused while the phone is not in sync, but any other save on a phone that is behind can still do this.
@@ -37,9 +37,9 @@ The Review tab lists what an AI app on Cloud Connect asked to change in a memory
 - **Text an AI app wrote is shown as one line.** Line breaks become spaces and characters that cannot be drawn are removed, so the layout of the saved memory is not what you see there. A text longer than 280 characters must be opened with Show all before Yes is enabled.
 - **Answers you give an AI app in chat are listed here too, with their own limits.** See the next section.
 
-## Answers an AI app reports (ADR 0092), built, not yet released
+## Answers an AI app reports (ADR 0092), Mac and phone 0.31.0
 
-When an AI app sees two memories that disagree in one search result, NorthKeep's note asks it to ask you which is right and report your answer with `memory_resolve`. An everyday answer is accepted in chat with no tap; anything else waits for your yes on the phone's Review tab. Every accepted answer is listed there with an Undo. It ships with the next phone and Mac releases. What it does not do:
+When an AI app sees two memories that disagree in one search result, NorthKeep's note asks it to ask you which is right and report your answer with `memory_resolve`. An everyday answer is accepted in chat with no tap; anything else waits for your yes on the phone's Review tab. Every accepted answer is listed there with an Undo. It ships in Mac 0.31.0 and phone 0.31.0 (build 36), and Cloud apps can report answers through Cloud Connect. What it does not do:
 
 - **NorthKeep does not look for memories that disagree.** An AI app that sees two in one result may ask you; one that does not, or ignores NorthKeep's note, never will. Checked by hand on 2026-11-25: Grok Bot and Muse ask. Not checked: Claude, Codex, ChatGPT.
 - **An answer is what an AI app reports you said.** NorthKeep keeps the app's name and the words, and cannot check them. An app can make up the disagreement or your words.
